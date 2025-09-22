@@ -13,7 +13,7 @@ import json
 import argparse
 from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional
-from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter
+from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
 
 
 def load_processed_events(file_path: str = "processed_events.json") -> Set[str]:
@@ -105,19 +105,18 @@ def build_bitcoin_mining_query(recency_minutes: int = 90) -> QueryEvents:
     
     # Build query with Bitcoin mining focus
     query = QueryEvents(
-        keywords=QueryEvents.CombinedQuery.AND(include_keywords[:5]),  # Use first 5 main keywords
+        keywords=QueryItems.AND(include_keywords[:5]),  # Use first 5 main keywords
         dateStart=start_date.date(),
         dateEnd=end_date.date(),
         lang="eng",  # English language
         minArticlesInEvent=2,  # Ensure it's a real event with multiple sources
         maxArticlesInEvent=50,  # Reasonable upper bound
-        articlesSortBy="relevance",
-        eventsPage=1,
-        eventsCount=20,  # Get more events to filter from
-        includeEventTitle=True,
-        includeEventSummary=True,
-        includeEventArticleCounts=True,
-        includeEventConcepts=True
+        requestedResult=RequestEventsInfo(
+            page=1,
+            count=20,  # Get more events to filter from
+            sortBy="relevance",
+            returnInfo=None  # Use default return info
+        )
     )
     
     return query
