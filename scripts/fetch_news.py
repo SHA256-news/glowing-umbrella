@@ -104,16 +104,26 @@ def build_bitcoin_mining_query(recency_minutes: int = 90) -> QueryEvents:
     ]
     
     # Build query with Bitcoin mining focus
+    # Use OR for broader search, then filter more specifically afterwards
+    core_bitcoin_terms = ["bitcoin mining", "bitcoin miner", "bitcoin"]
+    secondary_terms = ["hashrate", "ASIC", "mining pools", "mining difficulty", "proof of work"]
+    
     query = QueryEvents(
-        keywords=QueryItems.AND(include_keywords[:5]),  # Use first 5 main keywords
+        keywords=QueryItems.OR([
+            QueryItems.AND([core_bitcoin_terms[0]]),  # "bitcoin mining"
+            QueryItems.AND([core_bitcoin_terms[1]]),  # "bitcoin miner" 
+            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[0]]),  # "bitcoin" AND "hashrate"
+            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[1]]),  # "bitcoin" AND "ASIC"
+            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[2]]),  # "bitcoin" AND "mining pools"
+        ]),
         dateStart=start_date.date(),
         dateEnd=end_date.date(),
         lang="eng",  # English language
-        minArticlesInEvent=2,  # Ensure it's a real event with multiple sources
+        minArticlesInEvent=1,  # Reduced from 2 to find more events
         maxArticlesInEvent=50,  # Reasonable upper bound
         requestedResult=RequestEventsInfo(
             page=1,
-            count=20,  # Get more events to filter from
+            count=30,  # Increased from 20 to get more events to filter from
             sortBy="relevance",
             returnInfo=None  # Use default return info
         )
@@ -286,12 +296,29 @@ def main():
             )
         
         if not new_event_uris:
-            print("No new events found", file=sys.stderr)
+            print("No new events found from API", file=sys.stderr)
             if args.output_format == 'uris':
                 # For uris format, output existing queue URIs if no new events
-                for uri in existing_queue:
-                    print(uri)
-            return
+                if existing_queue:
+                    print("Using existing events from queue", file=sys.stderr)
+                    for uri in existing_queue:
+                        print(uri)
+                    return
+                else:
+                    print("No existing events in queue either", file=sys.stderr)
+                    # Exit gracefully - let the workflow handle empty output
+                    return
+            else:
+                # For JSON format, provide empty but valid response
+                summary = {
+                    'new_events_added': 0,
+                    'total_events_in_queue': len(existing_queue),
+                    'fetch_time': datetime.now().isoformat(),
+                    'new_event_uris': [],
+                    'existing_queue_uris': existing_queue
+                }
+                print(json.dumps(summary, indent=2))
+                return
         
         # Deduplicate against processed events and existing queue
         unique_new_events = []
@@ -304,10 +331,27 @@ def main():
         if not unique_new_events:
             print("All fetched events were already processed or queued", file=sys.stderr)
             if args.output_format == 'uris':
-                # For uris format, output existing queue URIs if no new events
-                for uri in existing_queue:
-                    print(uri)
-            return
+                # For uris format, output existing queue URIs if no new unique events
+                if existing_queue:
+                    print("Using existing events from queue", file=sys.stderr)
+                    for uri in existing_queue:
+                        print(uri)
+                    return
+                else:
+                    print("No events available in queue", file=sys.stderr)
+                    # Exit gracefully - let the workflow handle empty output
+                    return
+            else:
+                # For JSON format, provide info about existing queue
+                summary = {
+                    'new_events_added': 0,
+                    'total_events_in_queue': len(existing_queue),
+                    'fetch_time': datetime.now().isoformat(),
+                    'new_event_uris': [],
+                    'existing_queue_uris': existing_queue
+                }
+                print(json.dumps(summary, indent=2))
+                return
         
         # Combine with existing queue and save
         updated_queue = existing_queue + unique_new_events
