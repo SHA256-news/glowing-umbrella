@@ -11,6 +11,8 @@ import os
 import json
 import re
 import sys
+import signal
+import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 from eventregistry import EventRegistry, QueryEvent, RequestEventInfo
@@ -104,6 +106,56 @@ def sanitize_filename(headline):
     sanitized = re.sub(r'[^a-z0-9\-_]', '', sanitized)
     return f"{sanitized[:100]}.json"
 
+def timeout_handler(signum, frame):
+    """Handle timeout for API calls."""
+    raise TimeoutError("API call timed out")
+
+def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
+    """Fetch event details with timeout."""
+    # Set up timeout handler
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(timeout_seconds)
+    
+    try:
+        q = QueryEvent(event_uri, requestedResult=RequestEventInfo())
+        result = er.execQuery(q)
+        signal.alarm(0)  # Cancel the alarm
+        return result
+    except TimeoutError:
+        signal.alarm(0)  # Cancel the alarm
+        raise TimeoutError(f"EventRegistry API call timed out after {timeout_seconds} seconds")
+    except Exception as e:
+        signal.alarm(0)  # Cancel the alarm
+        raise e
+    """Creates a detailed prompt for the Gemini model based on event details."""
+    
+    event_title = event_details.get('title', 'N/A')
+    event_summary = event_details.get('summary', 'N/A')
+    event_concepts = [concept['label'] for concept in event_details.get('concepts', [])]
+    
+    prompt = f"""
+    Act as a senior financial journalist with a writing style that blends the analytical depth of The Wall Street Journal with the global perspective of The Financial Times.
+
+    Your task is to generate a comprehensive news article based on the following event data:
+    - Event Title: {event_title}
+    - Event Summary: {event_summary}
+    - Key Concepts: {', '.join(event_concepts)}
+
+    Generate the article in a structured JSON format. The JSON object must contain the following keys: "headline", "summary", "key_points", "body", "tags", "reflection_questions", "calls_to_action".
+
+    Follow these specific instructions:
+    1.  **Headline (`headline`):** Create a compelling, professional headline.
+    2.  **Summary (`summary`):** Write a concise, one-paragraph summary that encapsulates the most critical information.
+    3.  **Key Points (`key_points`):** Provide a list of 3-5 bullet points highlighting the main takeaways.
+    4.  **Body (`body`):** Write a detailed, multi-paragraph article. Provide context, perspective, and link to other relevant news or market trends where appropriate. Crucially, avoid speculation. All claims should be grounded in the provided data. If you infer connections, state them cautiously (e.g., "This development could be seen in the context of...").
+    5.  **Tags (`tags`):** Generate a list of relevant keywords for categorization (e.g., "mergers-and-acquisitions", "tech-industry", "market-analysis").
+    6.  **Reflection Questions (`reflection_questions`):** Create a list of 2-3 thought-provoking questions that encourage the reader to think critically about the topic's implications.
+    7.  **Calls to Action (`calls_to_action`):** Formulate 1-2 calls to action prompting readers to engage, such as leaving a comment with their perspective or contacting a relevant entity.
+
+    Ensure the entire output is a single, valid JSON object. Do not include any text or formatting outside of the JSON structure.
+    """
+    return prompt
+
 def get_ai_prompt(event_details):
     """Creates a detailed prompt for the Gemini model based on event details."""
     
@@ -138,22 +190,35 @@ def get_ai_prompt(event_details):
 
 def main():
     """Main function to generate articles from events."""
+    parser = argparse.ArgumentParser(description='Generate articles from Bitcoin mining news events')
+    parser.add_argument('--test-mode', action='store_true',
+                       help='Run in test mode with sample data (no API calls)')
+    
+    args = parser.parse_args()
+    
     print("Starting article generation process...")
+    
+    if args.test_mode:
+        print("🧪 Running in TEST MODE - using sample data, no API calls")
 
-    # Ensure API keys are set
-    if not EVENT_REGISTRY_API_KEY or not GEMINI_API_KEY:
+    # Ensure API keys are set (unless in test mode)
+    if not args.test_mode and (not EVENT_REGISTRY_API_KEY or not GEMINI_API_KEY):
         print("Error: API keys for Event Registry or Gemini are not set in the .env file.")
         print("Please set EVENT_REGISTRY_API_KEY and GEMINI_API_KEY environment variables.")
+        print("Or use --test-mode to run with sample data.")
         sys.exit(1)
 
-    # Initialize clients
-    try:
-        er = EventRegistry(apiKey=EVENT_REGISTRY_API_KEY)
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
-    except Exception as e:
-        print(f"Error initializing API clients: {e}")
-        sys.exit(1)
+    # Initialize clients (unless in test mode)
+    er = None
+    model = None
+    if not args.test_mode:
+        try:
+            er = EventRegistry(apiKey=EVENT_REGISTRY_API_KEY)
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-pro')
+        except Exception as e:
+            print(f"Error initializing API clients: {e}")
+            sys.exit(1)
 
     # Ensure articles directory exists
     try:
@@ -178,31 +243,77 @@ def main():
     for event_uri in event_uris:
         print(f"\nProcessing event: {event_uri}")
         try:
-            # 1. Fetch event details from Event Registry
-            q = QueryEvent(event_uri, requestedResult=RequestEventInfo())
-            result = er.execQuery(q)
-            
-            if not result or not result.get('event'):
-                raise ValueError("No event information found for this event URI.")
-            
-            event_info = result['event']
-            event_details = {
-                "title": event_info.get("title", {}).get("eng", "No Title Provided"),
-                "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
-                "concepts": event_info.get("concepts", [])
-            }
+            if args.test_mode:
+                # Use sample data in test mode
+                print(f"  Using sample data for testing...")
+                event_details = {
+                    "title": f"Bitcoin Mining Difficulty Reaches All-Time High ({event_uri})",
+                    "summary": "Bitcoin mining difficulty has increased by 6.2% in the latest adjustment, marking the highest difficulty level in the network's history. This adjustment reflects the growing hash rate and increased competition among miners.",
+                    "concepts": [
+                        {"label": "Bitcoin mining"},
+                        {"label": "Mining difficulty"},
+                        {"label": "Hash rate"},
+                        {"label": "Cryptocurrency"}
+                    ]
+                }
+                print(f"  Event title: {event_details['title']}")
+                
+                # Generate a sample article in test mode
+                article_data = {
+                    "headline": f"Bitcoin Mining Difficulty Surges to Record High as Network Security Strengthens (Event {event_uri})",
+                    "summary": "Bitcoin's mining difficulty has reached an unprecedented level following a 6.2% upward adjustment, signaling robust network health and continued miner confidence despite recent market volatility.",
+                    "key_points": [
+                        "Mining difficulty increased by 6.2% to an all-time high",
+                        "Rising hash rate indicates strong network security",
+                        "Miner participation remains robust despite economic pressures",
+                        "Adjustment reflects growing institutional mining operations"
+                    ],
+                    "body": "Bitcoin's mining difficulty has reached a new milestone, climbing 6.2% in the latest bi-weekly adjustment to establish an all-time high. This development underscores the remarkable resilience and growth of the Bitcoin network's computational security infrastructure.\n\nThe difficulty adjustment, an automated mechanism that recalibrates approximately every two weeks, responds to changes in the network's total hash rate. The current increase reflects sustained growth in mining participation, suggesting that despite recent market turbulence, miners remain committed to securing the network.\n\nIndustry analysts point to several factors driving this trend. Institutional mining operations continue to expand their capacity, while improvements in mining hardware efficiency enable operators to maintain profitability even as difficulty rises. This dynamic creates a positive feedback loop that strengthens network security while demonstrating the maturation of Bitcoin's infrastructure ecosystem.",
+                    "tags": ["bitcoin-mining", "cryptocurrency", "network-security", "hash-rate", "difficulty-adjustment"],
+                    "reflection_questions": [
+                        "What does the continuous increase in mining difficulty suggest about institutional confidence in Bitcoin's long-term value proposition?",
+                        "How might sustained high mining difficulty levels impact Bitcoin's energy consumption narrative and environmental considerations?"
+                    ],
+                    "calls_to_action": [
+                        "Share your thoughts on how mining difficulty trends might influence Bitcoin's price trajectory in the comments below.",
+                        "Stay informed about Bitcoin mining developments by following our comprehensive market analysis."
+                    ]
+                }
+                print(f"  Sample article generated successfully")
+            else:
+                # Real API mode
+                # 1. Fetch event details from Event Registry with timeout
+                print(f"  Fetching event details from EventRegistry...")
+                result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
+                
+                if not result or not result.get('event'):
+                    raise ValueError("No event information found for this event URI.")
+                
+                event_info = result['event']
+                event_details = {
+                    "title": event_info.get("title", {}).get("eng", "No Title Provided"),
+                    "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
+                    "concepts": event_info.get("concepts", [])
+                }
+                print(f"  Event title: {event_details['title'][:100]}...")
 
-            # 2. Generate article using Gemini
-            prompt = get_ai_prompt(event_details)
-            response = model.generate_content(prompt)
-            
-            # Clean up the response to get a valid JSON string
-            cleaned_response_text = response.text.strip().replace('```json', '').replace('```', '').strip()
-            article_data = json.loads(cleaned_response_text)
+                # 2. Generate article using Gemini
+                print(f"  Generating article with Gemini AI...")
+                prompt = get_ai_prompt(event_details)
+                response = model.generate_content(prompt)
+                
+                # Clean up the response to get a valid JSON string
+                cleaned_response_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+                article_data = json.loads(cleaned_response_text)
+                print(f"  Article generated successfully")
 
             # 3. Save the generated article
             headline = article_data.get("headline", f"article-{event_uri}")
-            filename = sanitize_filename(headline)
+            # Create unique filename using headline and event URI
+            base_filename = sanitize_filename(headline)
+            # Remove .json extension and add URI hash for uniqueness
+            uri_hash = str(hash(event_uri))[-6:]  # Last 6 chars of hash
+            filename = f"{base_filename[:-5]}-{uri_hash}.json"  # Remove .json and add hash
             filepath = os.path.join(ARTICLES_DIR, filename)
             
             # Ensure the output format is easily uploadable
