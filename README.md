@@ -5,7 +5,7 @@ Automated news pipeline for Bitcoin-only mining content generation and distribut
 ## Overview
 
 This repository contains an automated pipeline that:
-1. Fetches recent news articles about Bitcoin-only mining
+1. Fetches recent news events about Bitcoin-only mining with deduplication
 2. Generates comprehensive articles using AI
 3. Creates Twitter thread summaries
 4. Publishes content through GitHub Actions workflows
@@ -14,7 +14,7 @@ This repository contains an automated pipeline that:
 
 ### Python Scripts (`scripts/`)
 
-- **`fetch_news.py`**: Fetches Bitcoin mining news using EventRegistry API
+- **`fetch_news.py`**: Fetches Bitcoin mining news events using EventRegistry API with robust deduplication system
 - **`generate_article.py`**: Generates articles from news events using Google Gemini API  
 - **`create_summary.py`**: Creates Twitter thread summaries from generated articles
 
@@ -40,8 +40,11 @@ This repository contains an automated pipeline that:
 ### Manual Script Usage
 
 ```bash
-# Fetch news articles
-python scripts/fetch_news.py --max-articles 5 --days-back 7
+# Fetch Bitcoin mining news events (saves to events.json)
+python scripts/fetch_news.py --max-articles 5 --recency-minutes 90
+
+# Fetch with custom options
+python scripts/fetch_news.py --max-articles 10 --recency-minutes 1440 --output custom_events.json
 
 # Generate article from event URI
 python scripts/generate_article.py <event_uri> --output article.json
@@ -49,6 +52,19 @@ python scripts/generate_article.py <event_uri> --output article.json
 # Create Twitter thread summary
 python scripts/create_summary.py article.json --format text
 ```
+
+### Deduplication System
+
+The `fetch_news.py` script implements a robust deduplication system:
+
+1. **Event Clustering**: Uses EventRegistry's event clustering to get unique news stories rather than duplicate articles
+2. **Temporal Deduplication**: Maintains `processed_events.json` to track previously processed events
+3. **Queue Management**: Uses `events.json` as a queue for new events to be processed
+4. **Bitcoin-Only Filtering**: Focuses on Bitcoin mining while excluding other cryptocurrencies
+
+**Files used by the system:**
+- `events.json`: Queue of event URIs waiting to be processed
+- `processed_events.json`: Long-term memory of all events that have been published
 
 ### Automated Workflows
 

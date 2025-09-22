@@ -247,6 +247,8 @@ def main():
                        help='File tracking processed events (default: processed_events.json)')
     parser.add_argument('--force', action='store_true',
                        help='Skip deduplication and fetch events anyway')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Show what would be fetched without making API calls')
     
     args = parser.parse_args()
     
@@ -264,10 +266,17 @@ def main():
         
         # Fetch new events
         print(f"Fetching up to {args.max_articles} events from last {args.recency_minutes} minutes...", file=sys.stderr)
-        new_event_uris = fetch_bitcoin_mining_events(
-            recency_minutes=args.recency_minutes,
-            max_events=args.max_articles
-        )
+        
+        if args.dry_run:
+            print("🧪 DRY RUN MODE: No API calls will be made", file=sys.stderr)
+            # Simulate some events for dry run
+            new_event_uris = [f"dry-run-event-{i}" for i in range(1, min(args.max_articles + 1, 4))]
+            print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
+        else:
+            new_event_uris = fetch_bitcoin_mining_events(
+                recency_minutes=args.recency_minutes,
+                max_events=args.max_articles
+            )
         
         if not new_event_uris:
             print("No new events found", file=sys.stderr)

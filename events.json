@@ -1,8 +1,0 @@
-{
-  "event_uris": [
-    "queued-bitcoin-event-1",
-    "queued-bitcoin-event-2"
-  ],
-  "updated_at": "2025-09-21T18:00:00.000000",
-  "total_events": 2
-}
