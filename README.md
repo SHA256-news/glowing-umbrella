@@ -14,7 +14,7 @@ This repository contains an automated pipeline that:
 
 ### Python Scripts (`scripts/`)
 
-- **`fetch_news.py`**: Fetches Bitcoin mining news using EventRegistry API
+- **`fetch_news.py`**: Fetches Bitcoin mining news using EventRegistry API with filtering, deduplication, and JSON file saving capabilities
 - **`generate_article.py`**: Generates articles from news events using Google Gemini API  
 - **`create_summary.py`**: Creates Twitter thread summaries from generated articles
 
@@ -40,8 +40,14 @@ This repository contains an automated pipeline that:
 ### Manual Script Usage
 
 ```bash
-# Fetch news articles
+# Fetch news articles (basic usage)
 python scripts/fetch_news.py --max-articles 5 --days-back 7
+
+# Save articles to JSON file with enhanced filtering and deduplication
+python scripts/fetch_news.py --max-articles 10 --days-back 7 --output-file bitcoin_news.json
+
+# Get only URIs for pipeline usage
+python scripts/fetch_news.py --max-articles 5 --output-format uris
 
 # Generate article from event URI
 python scripts/generate_article.py <event_uri> --output article.json

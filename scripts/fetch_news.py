@@ -9,8 +9,63 @@ using the EventRegistry API and outputs relevant event URIs.
 import os
 import sys
 import json
+import hashlib
 from datetime import datetime, timedelta
 from eventregistry import EventRegistry, QueryArticlesIter
+
+
+def deduplicate_articles(articles):
+    """
+    Remove duplicate articles based on title and URL similarity.
+    
+    Args:
+        articles (list): List of article dictionaries.
+    
+    Returns:
+        list: Deduplicated list of articles.
+    """
+    seen_hashes = set()
+    deduplicated = []
+    
+    for article in articles:
+        # Create a hash based on title and URL for deduplication
+        title = article.get('title', '').strip().lower()
+        url = article.get('url', '').strip()
+        
+        # Create a unique identifier
+        content_hash = hashlib.md5(f"{title}{url}".encode('utf-8')).hexdigest()
+        
+        if content_hash not in seen_hashes:
+            seen_hashes.add(content_hash)
+            deduplicated.append(article)
+    
+    return deduplicated
+
+
+def save_articles_to_file(articles, filename):
+    """
+    Save articles to a JSON file with metadata.
+    
+    Args:
+        articles (list): List of article dictionaries.
+        filename (str): Path to the output file.
+    """
+    output_data = {
+        'metadata': {
+            'total_articles': len(articles),
+            'fetched_at': datetime.now().isoformat(),
+            'api_source': 'EventRegistry'
+        },
+        'articles': articles
+    }
+    
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        print(f"Articles saved to: {filename}", file=sys.stderr)
+    except Exception as e:
+        print(f"Error saving to file: {e}", file=sys.stderr)
+        raise
 
 
 def fetch_bitcoin_mining_news(api_key=None, max_articles=10, days_back=7):
@@ -40,11 +95,15 @@ def fetch_bitcoin_mining_news(api_key=None, max_articles=10, days_back=7):
     # Search keywords related to Bitcoin-only mining
     keywords = [
         "Bitcoin mining",
-        "Bitcoin-only mining",
+        "Bitcoin-only mining", 
         "cryptocurrency mining",
         "Bitcoin hashrate",
         "mining pools",
-        "Bitcoin miners"
+        "Bitcoin miners",
+        "mining difficulty",
+        "ASIC mining",
+        "proof of work",
+        "mining farm"
     ]
     
     articles = []
@@ -74,15 +133,25 @@ def fetch_bitcoin_mining_news(api_key=None, max_articles=10, days_back=7):
                 'relevance': article.get('relevance', 0)
             }
             
-            # Filter for Bitcoin/mining relevance
+            # Enhanced filtering for Bitcoin/mining relevance
             content = f"{article_data['title']} {article_data['body']}".lower()
-            if any(term in content for term in ['bitcoin', 'mining', 'hashrate', 'cryptocurrency']):
+            bitcoin_terms = ['bitcoin', 'btc']
+            mining_terms = ['mining', 'hashrate', 'miner', 'asic', 'pool', 'difficulty']
+            
+            # Must contain at least one Bitcoin term and one mining term
+            has_bitcoin = any(term in content for term in bitcoin_terms)
+            has_mining = any(term in content for term in mining_terms)
+            
+            if has_bitcoin and has_mining:
                 articles.append(article_data)
                 count += 1
                 
     except Exception as e:
         print(f"Error fetching articles: {e}", file=sys.stderr)
         return []
+    
+    # Apply deduplication
+    articles = deduplicate_articles(articles)
     
     return articles
 
@@ -98,6 +167,8 @@ def main():
                        help='Number of days back to search (default: 7)')
     parser.add_argument('--output-format', choices=['json', 'uris'], default='json',
                        help='Output format: json for full data, uris for just event URIs')
+    parser.add_argument('--output-file', type=str,
+                       help='Save results to specified JSON file instead of stdout')
     
     args = parser.parse_args()
     
@@ -111,13 +182,34 @@ def main():
             print("No relevant articles found.", file=sys.stderr)
             sys.exit(1)
         
-        if args.output_format == 'uris':
-            # Output just the URIs for pipeline usage
-            for article in articles:
-                print(article['uri'])
+        print(f"Found {len(articles)} relevant articles after deduplication.", file=sys.stderr)
+        
+        if args.output_file:
+            # Save to file
+            if args.output_format == 'uris':
+                # For URIs, create a simple list structure
+                uri_data = {
+                    'metadata': {
+                        'total_uris': len(articles),
+                        'fetched_at': datetime.now().isoformat(),
+                        'format': 'uris_only'
+                    },
+                    'uris': [article['uri'] for article in articles]
+                }
+                with open(args.output_file, 'w', encoding='utf-8') as f:
+                    json.dump(uri_data, f, indent=2, ensure_ascii=False)
+                print(f"URIs saved to: {args.output_file}", file=sys.stderr)
+            else:
+                save_articles_to_file(articles, args.output_file)
         else:
-            # Output full JSON data
-            print(json.dumps(articles, indent=2, ensure_ascii=False))
+            # Output to stdout
+            if args.output_format == 'uris':
+                # Output just the URIs for pipeline usage
+                for article in articles:
+                    print(article['uri'])
+            else:
+                # Output full JSON data
+                print(json.dumps(articles, indent=2, ensure_ascii=False))
             
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
