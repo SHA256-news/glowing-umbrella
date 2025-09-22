@@ -241,8 +241,12 @@ def main():
                        help='Maximum number of events to fetch (default: 5)')
     parser.add_argument('--recency-minutes', type=int, default=90,
                        help='How far back to look for events in minutes (default: 90)')
+    parser.add_argument('--days-back', type=int,
+                       help='Number of days back to search (converted to minutes)')
     parser.add_argument('--output', default='events.json',
                        help='Output file for event queue (default: events.json)')
+    parser.add_argument('--output-format', choices=['json', 'uris'], default='json',
+                       help='Output format: json (default) or uris (one URI per line)')
     parser.add_argument('--processed-file', default='processed_events.json',
                        help='File tracking processed events (default: processed_events.json)')
     parser.add_argument('--force', action='store_true',
@@ -251,6 +255,10 @@ def main():
                        help='Show what would be fetched without making API calls')
     
     args = parser.parse_args()
+    
+    # Convert days-back to recency-minutes if provided
+    if args.days_back is not None:
+        args.recency_minutes = args.days_back * 24 * 60  # Convert days to minutes
     
     try:
         # Load existing processed events for deduplication
@@ -280,6 +288,10 @@ def main():
         
         if not new_event_uris:
             print("No new events found", file=sys.stderr)
+            if args.output_format == 'uris':
+                # For uris format, output existing queue URIs if no new events
+                for uri in existing_queue:
+                    print(uri)
             return
         
         # Deduplicate against processed events and existing queue
@@ -292,6 +304,10 @@ def main():
         
         if not unique_new_events:
             print("All fetched events were already processed or queued", file=sys.stderr)
+            if args.output_format == 'uris':
+                # For uris format, output existing queue URIs if no new events
+                for uri in existing_queue:
+                    print(uri)
             return
         
         # Combine with existing queue and save
@@ -301,14 +317,20 @@ def main():
         print(f"✅ Added {len(unique_new_events)} new events to queue", file=sys.stderr)
         print(f"📊 Total events in queue: {len(updated_queue)}", file=sys.stderr)
         
-        # Print summary to stdout for pipeline integration
-        summary = {
-            'new_events_added': len(unique_new_events),
-            'total_events_in_queue': len(updated_queue),
-            'fetch_time': datetime.now().isoformat(),
-            'new_event_uris': unique_new_events
-        }
-        print(json.dumps(summary, indent=2))
+        # Output based on format
+        if args.output_format == 'uris':
+            # For uris format, output all URIs in the queue (one per line)
+            for uri in updated_queue:
+                print(uri)
+        else:
+            # Default JSON format for pipeline integration
+            summary = {
+                'new_events_added': len(unique_new_events),
+                'total_events_in_queue': len(updated_queue),
+                'fetch_time': datetime.now().isoformat(),
+                'new_event_uris': unique_new_events
+            }
+            print(json.dumps(summary, indent=2))
         
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
