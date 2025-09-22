@@ -43,8 +43,11 @@ This repository contains an automated pipeline that:
 # Fetch Bitcoin mining news events (saves to events.json)
 python scripts/fetch_news.py --max-articles 5 --recency-minutes 90
 
-# Fetch with custom options
-python scripts/fetch_news.py --max-articles 10 --recency-minutes 1440 --output custom_events.json
+# Fetch with custom options using days-back
+python scripts/fetch_news.py --max-articles 10 --days-back 1 --output custom_events.json
+
+# Fetch and output URIs for workflow integration
+python scripts/fetch_news.py --max-articles 5 --days-back 1 --output-format uris
 
 # Generate article from event URI
 python scripts/generate_article.py <event_uri> --output article.json
