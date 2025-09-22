@@ -1,3 +1,4 @@
 eventregistry
 google-generativeai
 tweepy
+python-dotenv
