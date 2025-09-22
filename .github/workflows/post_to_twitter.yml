@@ -1,0 +1,205 @@
+name: Post to Twitter
+
+on:
+  workflow_dispatch:
+    inputs:
+      article_run_number:
+        description: 'Run number of the article generation workflow'
+        required: true
+        type: string
+      max_tweets:
+        description: 'Maximum number of tweets in thread'
+        required: false
+        default: '8'
+        type: string
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  create-and-post-summary:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Download article artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: generated-article-${{ github.event.inputs.article_run_number }}
+        path: ./artifacts/
+        
+    - name: Verify article file
+      run: |
+        if [ ! -f "./artifacts/generated_article.json" ]; then
+          echo "Article file not found in artifacts"
+          ls -la ./artifacts/
+          exit 1
+        fi
+        
+        echo "Article file found:"
+        ls -la ./artifacts/generated_article.json
+        
+    - name: Create Twitter thread summary
+      id: create_summary
+      run: |
+        max_tweets="${{ github.event.inputs.max_tweets || '8' }}"
+        
+        echo "Creating Twitter thread summary..."
+        python scripts/create_summary.py \
+          "./artifacts/generated_article.json" \
+          --max-tweets "$max_tweets" \
+          --output "twitter_thread.json" \
+          --format json
+        
+        # Verify the summary was created
+        if [ ! -f "twitter_thread.json" ]; then
+          echo "Failed to create Twitter thread summary."
+          exit 1
+        fi
+        
+        echo "Twitter thread summary created successfully"
+        
+        # Get thread info for outputs
+        total_tweets=$(python -c "import json; data=json.load(open('twitter_thread.json')); print(data['total_tweets'])")
+        echo "total_tweets=$total_tweets" >> $GITHUB_OUTPUT
+        
+    - name: Post to Twitter (Simulation)
+      id: post_twitter
+      env:
+        # Twitter API v2 credentials (when available)
+        TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
+        TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
+        TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+        TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+        TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+      run: |
+        # For now, this simulates posting to Twitter
+        # In a real implementation, this would use the Twitter API via tweepy
+        
+        echo "=== TWITTER THREAD SIMULATION ==="
+        echo "Would post the following thread to Twitter:"
+        echo ""
+        
+        # Display the thread in text format for verification
+        python scripts/create_summary.py \
+          "./artifacts/generated_article.json" \
+          --max-tweets "${{ steps.create_summary.outputs.total_tweets }}" \
+          --format text
+        
+        echo ""
+        echo "=== END SIMULATION ==="
+        
+        # TODO: Implement actual Twitter posting when credentials are available
+        # Example implementation:
+        # python -c "
+        # import json
+        # import tweepy
+        # import os
+        # 
+        # # Load thread data
+        # with open('twitter_thread.json', 'r') as f:
+        #     thread_data = json.load(f)
+        # 
+        # # Initialize Twitter API
+        # client = tweepy.Client(
+        #     consumer_key=os.getenv('TWITTER_CONSUMER_KEY'),
+        #     consumer_secret=os.getenv('TWITTER_CONSUMER_SECRET'),
+        #     access_token=os.getenv('TWITTER_ACCESS_TOKEN'),
+        #     access_token_secret=os.getenv('TWITTER_ACCESS_TOKEN_SECRET'),
+        #     bearer_token=os.getenv('TWITTER_BEARER_TOKEN')
+        # )
+        # 
+        # # Post thread
+        # tweets = thread_data['thread']
+        # tweet_ids = []
+        # 
+        # for i, tweet_text in enumerate(tweets):
+        #     if i == 0:
+        #         # First tweet
+        #         response = client.create_tweet(text=tweet_text)
+        #     else:
+        #         # Reply to previous tweet
+        #         response = client.create_tweet(
+        #             text=tweet_text,
+        #             in_reply_to_tweet_id=tweet_ids[-1]
+        #         )
+        #     
+        #     tweet_ids.append(response.data['id'])
+        #     print(f'Posted tweet {i+1}/{len(tweets)}: {response.data[\"id\"]}')
+        # 
+        # print(f'Thread posted successfully! First tweet: https://twitter.com/user/status/{tweet_ids[0]}')
+        # "
+        
+        echo "Twitter posting simulation completed"
+        
+    - name: Create summary comment in article issue
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          // Read the Twitter thread data
+          const threadData = JSON.parse(fs.readFileSync('twitter_thread.json', 'utf8'));
+          
+          // Find the most recent article issue
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: 'automated-article',
+            state: 'open',
+            sort: 'created',
+            direction: 'desc',
+            per_page: 1
+          });
+          
+          if (issues.data.length === 0) {
+            console.log('No article issue found to comment on');
+            return;
+          }
+          
+          const issue = issues.data[0];
+          
+          // Create comment body with Twitter thread
+          const commentBody = `## 🐦 Twitter Thread Summary
+
+          A ${threadData.total_tweets}-tweet thread summary has been created for this article:
+
+          ${threadData.thread.map((tweet, index) => `**Tweet ${index + 1}:**\n${tweet}`).join('\n\n')}
+
+          ---
+
+          *Thread created at: ${threadData.created_at}*
+          
+          > **Note:** This is a simulated posting. In production, this would be automatically posted to Twitter.`;
+
+          // Add comment to the issue
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: issue.number,
+            body: commentBody
+          });
+
+          console.log(`Added Twitter thread summary to issue #${issue.number}`);
+          
+    - name: Upload Twitter thread artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: twitter-thread-${{ github.event.inputs.article_run_number }}
+        path: |
+          twitter_thread.json
+        retention-days: 30
