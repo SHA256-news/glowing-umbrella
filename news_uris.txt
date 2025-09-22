@@ -1,3 +1,0 @@
-dry-run-event-1
-dry-run-event-2
-dry-run-event-3

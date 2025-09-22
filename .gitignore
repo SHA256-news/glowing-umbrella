@@ -209,4 +209,6 @@ __marimo__/
 # Project specific files
 events.json
 processed_events.json
-*.json
+news_uris.txt
+generated_article.json
+articles/
