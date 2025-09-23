@@ -239,13 +239,16 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
             raise TimeoutError("API query timed out")
         
         print(f"Setting API timeout to {timeout_seconds} seconds for {recency_minutes} minute window", file=sys.stderr)
-        signal.signal(signal.SIGALRM, timeout_handler)
+        # Store original handler to restore later
+        original_handler = signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(timeout_seconds)
         
         try:
             result = er.execQuery(query)
         finally:
-            signal.alarm(0)  # Cancel the alarm
+            # Cancel the alarm and restore original handler
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, original_handler)
         
         if not result or 'events' not in result:
             print("No events found in API response", file=sys.stderr)
@@ -274,7 +277,14 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         raise APITimeoutError("API query timed out")
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
+        # For non-timeout errors, return empty list instead of crashing
         return []
+    finally:
+        # Ensure alarm is always canceled
+        try:
+            signal.alarm(0)
+        except:
+            pass
 
 
 def main():
@@ -354,8 +364,8 @@ def main():
                     max_events=args.max_articles
                 )
             except APITimeoutError:
-                print("API timeout occurred - this should trigger workflow fallback", file=sys.stderr)
-                sys.exit(1)
+                print("API timeout occurred - falling back to existing queue if available", file=sys.stderr)
+                new_event_uris = []
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)
