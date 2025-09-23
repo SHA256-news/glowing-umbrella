@@ -49,12 +49,26 @@ python scripts/fetch_news.py --max-articles 10 --days-back 1 --output custom_eve
 # Fetch and output URIs for workflow integration
 python scripts/fetch_news.py --max-articles 5 --days-back 1 --output-format uris
 
+# Performance-optimized fetch (recommended for automation)
+python scripts/fetch_news.py --max-articles 5 --days-back 1 --fast-mode --output-format uris
+
+# Ultra-fast fetch using the optimized shell wrapper
+scripts/fetch_btc_news.sh 5 1
+
 # Generate article from event URI
 python scripts/generate_article.py <event_uri> --output article.json
 
 # Create Twitter thread summary
 python scripts/create_summary.py article.json --format text
 ```
+
+### Performance Tips
+
+**For faster fetching:**
+- Use `--fast-mode` for optimized performance settings
+- Limit `--days-back` to 1-2 days (large time windows cause slow API queries)
+- Use smaller `--max-articles` values (5-10 recommended)
+- The shell wrapper `scripts/fetch_btc_news.sh` provides optimized defaults
 
 ### Deduplication System
 

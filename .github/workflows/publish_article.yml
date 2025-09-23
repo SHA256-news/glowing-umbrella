@@ -14,7 +14,7 @@ on:
       days_back:
         description: 'Number of days back to search'
         required: false
-        default: '7'
+        default: '1'  # Reduced from 7 to 1 for much better performance
         type: string
 
 env:
@@ -44,13 +44,24 @@ jobs:
         EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
       run: |
         max_articles="${{ github.event.inputs.max_articles || '5' }}"
-        days_back="${{ github.event.inputs.days_back || '7' }}"
+        days_back="${{ github.event.inputs.days_back || '1' }}"  # Performance: default to 1 day
         
-        echo "Fetching Bitcoin mining news..."
+        echo "Fetching Bitcoin mining news with performance optimizations..."
+        echo "Searching last $days_back day(s) for up to $max_articles articles"
+        
+        # Use optimized approach with fast mode and fallback
         python scripts/fetch_news.py \
           --max-articles "$max_articles" \
           --days-back "$days_back" \
-          --output-format uris > news_uris.txt
+          --output-format uris \
+          --fast-mode > news_uris.txt || {
+            echo "Fast mode failed, trying with smaller 8-hour window..."
+            python scripts/fetch_news.py \
+              --max-articles "$max_articles" \
+              --recency-minutes 480 \
+              --output-format uris \
+              --fast-mode > news_uris.txt
+          }
         
         # Check if we got any results
         if [ ! -s news_uris.txt ]; then
