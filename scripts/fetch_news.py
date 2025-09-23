@@ -216,6 +216,15 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
     if recency_minutes > 1440:  # More than 1 day
         print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
     
+    # Set a dynamic timeout based on time window size
+    # Smaller windows should complete faster, larger windows need more time
+    if recency_minutes <= 120:  # 2 hours or less
+        timeout_seconds = 15
+    elif recency_minutes <= 480:  # 8 hours or less  
+        timeout_seconds = 25
+    else:  # Larger windows
+        timeout_seconds = 30
+    
     try:
         er = EventRegistry(apiKey=api_key)
         
@@ -229,9 +238,9 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         def timeout_handler(signum, frame):
             raise TimeoutError("API query timed out")
         
-        # Set a reasonable timeout (30 seconds)
+        print(f"Setting API timeout to {timeout_seconds} seconds for {recency_minutes} minute window", file=sys.stderr)
         signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)
+        signal.alarm(timeout_seconds)
         
         try:
             result = er.execQuery(query)
@@ -261,7 +270,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         return event_uris
         
     except TimeoutError:
-        print("Error: API query timed out (>30 seconds). Try reducing the time window or number of articles.", file=sys.stderr)
+        print(f"Error: API query timed out (>{timeout_seconds} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
         raise APITimeoutError("API query timed out")
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
@@ -304,6 +313,13 @@ def main():
             original_minutes = args.recency_minutes
             args.recency_minutes = 1440  # Limit to 1 day
             print(f"Fast mode: Reduced time window from {original_minutes//1440} days to 1 day", file=sys.stderr)
+        
+        # Additional optimization: if still experiencing timeouts, start smaller
+        # Based on recent API performance issues, limit to 8 hours for ultra-fast mode
+        if args.recency_minutes > 480:  # More than 8 hours
+            original_minutes = args.recency_minutes
+            args.recency_minutes = 480  # Limit to 8 hours for better reliability
+            print(f"Fast mode: Further reduced time window from {original_minutes} minutes ({original_minutes//60} hours) to 8 hours for better API reliability", file=sys.stderr)
         
         # Limit max articles for faster processing
         if args.max_articles > 10:
