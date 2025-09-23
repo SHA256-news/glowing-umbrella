@@ -128,34 +128,6 @@ def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
         # Always cancel the alarm and restore original handler
         signal.alarm(0)
         signal.signal(signal.SIGALRM, original_handler)
-    """Creates a detailed prompt for the Gemini model based on event details."""
-    
-    event_title = event_details.get('title', 'N/A')
-    event_summary = event_details.get('summary', 'N/A')
-    event_concepts = [concept['label'] for concept in event_details.get('concepts', [])]
-    
-    prompt = f"""
-    Act as a senior financial journalist with a writing style that blends the analytical depth of The Wall Street Journal with the global perspective of The Financial Times.
-
-    Your task is to generate a comprehensive news article based on the following event data:
-    - Event Title: {event_title}
-    - Event Summary: {event_summary}
-    - Key Concepts: {', '.join(event_concepts)}
-
-    Generate the article in a structured JSON format. The JSON object must contain the following keys: "headline", "summary", "key_points", "body", "tags", "reflection_questions", "calls_to_action".
-
-    Follow these specific instructions:
-    1.  **Headline (`headline`):** Create a compelling, professional headline.
-    2.  **Summary (`summary`):** Write a concise, one-paragraph summary that encapsulates the most critical information.
-    3.  **Key Points (`key_points`):** Provide a list of 3-5 bullet points highlighting the main takeaways.
-    4.  **Body (`body`):** Write a detailed, multi-paragraph article. Provide context, perspective, and link to other relevant news or market trends where appropriate. Crucially, avoid speculation. All claims should be grounded in the provided data. If you infer connections, state them cautiously (e.g., "This development could be seen in the context of...").
-    5.  **Tags (`tags`):** Generate a list of relevant keywords for categorization (e.g., "mergers-and-acquisitions", "tech-industry", "market-analysis").
-    6.  **Reflection Questions (`reflection_questions`):** Create a list of 2-3 thought-provoking questions that encourage the reader to think critically about the topic's implications.
-    7.  **Calls to Action (`calls_to_action`):** Formulate 1-2 calls to action prompting readers to engage, such as leaving a comment with their perspective or contacting a relevant entity.
-
-    Ensure the entire output is a single, valid JSON object. Do not include any text or formatting outside of the JSON structure.
-    """
-    return prompt
 
 def get_ai_prompt(event_details):
     """Creates a detailed prompt for the Gemini model based on event details."""
@@ -288,9 +260,14 @@ def main():
                 result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
                 
                 if not result or not result.get('event'):
-                    raise ValueError("No event information found for this event URI.")
+                    raise ValueError(f"No event information found for this event URI. This could be due to the event being expired, removed, or the URI being invalid. Event URI: {event_uri}")
                 
                 event_info = result['event']
+                
+                # Validate that we have minimum required information
+                if not event_info.get("title") and not event_info.get("summary"):
+                    raise ValueError(f"Event found but contains insufficient information (no title or summary). Event URI: {event_uri}")
+                
                 event_details = {
                     "title": event_info.get("title", {}).get("eng", "No Title Provided"),
                     "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
@@ -321,6 +298,7 @@ def main():
             final_output = {
                 "source_event_uri": event_uri,
                 "generated_at": datetime.now().isoformat(),
+                "model_used": "gemini-pro" if not args.test_mode else "test-mode",
                 **article_data
             }
             write_json_file(filepath, final_output)
@@ -348,6 +326,22 @@ def main():
     print(f"Failed to process: {failed_count} events")
     if remaining_events:
         print(f"Remaining in queue: {len(remaining_events)} events")
+
+    # If no events were successfully processed, exit with error
+    if processed_count == 0 and len(event_uris) > 0:
+        print(f"\nError: Failed to process any of the {len(event_uris)} events.")
+        print("This could be due to:")
+        print("- Invalid or expired event URIs")
+        print("- EventRegistry API issues")
+        print("- Gemini API issues")
+        print("- Network connectivity problems")
+        print("\nCheck the failed_events.json file for detailed error information.")
+        sys.exit(1)
+    elif processed_count == 0:
+        print("\nNo events found to process. This is normal if the queue is empty.")
+        return
+    else:
+        print(f"\nSuccessfully processed {processed_count} out of {len(event_uris)} events.")
 
 if __name__ == "__main__":
     main()
