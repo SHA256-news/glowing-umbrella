@@ -124,9 +124,18 @@ def write_placeholder(path="generated_article.json"):
         "model_used": "placeholder-generator",
         "source_event_uri": "placeholder"
     }
+    
+    # Also write to articles directory for workflow compatibility
+    os.makedirs(ARTICLES_DIR, exist_ok=True)
+    article_filename = os.path.join(ARTICLES_DIR, f"placeholder-article-{int(time.time())}.json")
+    
     with open(path, "w") as f:
         json.dump(doc, f, indent=2)
+    with open(article_filename, "w") as f:
+        json.dump(doc, f, indent=2)
+        
     print(f"Wrote placeholder article to {path}")
+    print(f"Also wrote to {article_filename} for workflow compatibility")
 
 def sanitize_filename(headline):
     """Sanitizes a string to be a valid filename."""

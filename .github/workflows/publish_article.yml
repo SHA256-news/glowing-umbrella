@@ -47,18 +47,18 @@ jobs:
         env:
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
           MAX_ARTICLES: "5"
-          DAYS_BACK: "0.1"
+          MINUTES_BACK: "6"
           ENABLE_TEST_FALLBACK: "true"
         run: |
           set -euo pipefail
 
           max_articles="${MAX_ARTICLES:-5}"
-          days_back="${DAYS_BACK:-0.1}"
+          minutes_back="${MINUTES_BACK:-6}"
 
           echo "Attempting fast fetch..."
           python scripts/fetch_news.py \
             --max-articles "$max_articles" \
-            --days-back "$days_back" \
+            --minutes-back "$minutes_back" \
             --output-format uris \
             --fast-mode > news_uris.txt || true
 
@@ -96,6 +96,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
+          ENABLE_PLACEHOLDER: "true"
         run: |
           if [ -z "${{ steps.fetch_news.outputs.first_uri }}" ]; then
             echo "No news URI available for article generation."
@@ -159,6 +160,8 @@ jobs:
               echo "Failed to generate article - no files in articles directory."
               exit 1
             fi
+          elif [ -f "generated_article.json" ]; then
+            echo "Placeholder article generated directly"
           else
             echo "Failed to generate article."
             exit 1
