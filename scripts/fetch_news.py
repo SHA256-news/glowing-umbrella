@@ -411,7 +411,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
                 title = event.get('title', {}).get('eng', 'No title')
                 print(f"  - {uri}: {title[:100]}...", file=sys.stderr)
         
-        return event_uris, event_details_cache, event_details_cache
+        return event_uris, event_details_cache
         
     except TimeoutError:
         print(f"Error: API query timed out (>{timeout_seconds} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
