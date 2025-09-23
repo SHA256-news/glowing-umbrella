@@ -119,10 +119,7 @@ def build_simple_bitcoin_query(recency_minutes: int = 30, max_events: int = 5) -
         requestedResult=RequestEventsInfo(
             page=1,
             count=min(max_events * 2, 10),  # Request only 2x what we need, max 10
-            sortBy="date",  # Sort by date for most recent first
-            returnInfo=RequestEventsInfo.ReturnInfo(
-                eventInfo=["title", "summary", "concepts", "uri", "lang", "date"]
-            )
+            sortBy="date"  # Sort by date for most recent first
         )
     )
     
@@ -170,10 +167,7 @@ def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -
         requestedResult=RequestEventsInfo(
             page=1,
             count=min(max_events * 3, 15),  # Request only ~3x what we need, max 15
-            sortBy="date",  # Sort by date for most recent first
-            returnInfo=RequestEventsInfo.ReturnInfo(
-                eventInfo=["title", "summary", "concepts", "uri", "lang", "date"]
-            )
+            sortBy="date"  # Sort by date for most recent first
         )
     )
     
