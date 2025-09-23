@@ -16,6 +16,11 @@ from typing import List, Dict, Set, Optional
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
 
 
+class APITimeoutError(Exception):
+    """Custom exception for API timeout errors to distinguish from other errors."""
+    pass
+
+
 def load_processed_events(file_path: str = "processed_events.json") -> Set[str]:
     """
     Load previously processed event URIs from file.
@@ -211,6 +216,15 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
     if recency_minutes > 1440:  # More than 1 day
         print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
     
+    # Set a dynamic timeout based on time window size
+    # Smaller windows should complete faster, larger windows need more time
+    if recency_minutes <= 120:  # 2 hours or less
+        timeout_seconds = 15
+    elif recency_minutes <= 480:  # 8 hours or less  
+        timeout_seconds = 25
+    else:  # Larger windows
+        timeout_seconds = 30
+    
     try:
         er = EventRegistry(apiKey=api_key)
         
@@ -224,9 +238,9 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         def timeout_handler(signum, frame):
             raise TimeoutError("API query timed out")
         
-        # Set a reasonable timeout (30 seconds)
+        print(f"Setting API timeout to {timeout_seconds} seconds for {recency_minutes} minute window", file=sys.stderr)
         signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)
+        signal.alarm(timeout_seconds)
         
         try:
             result = er.execQuery(query)
@@ -256,8 +270,8 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         return event_uris
         
     except TimeoutError:
-        print("Error: API query timed out (>30 seconds). Try reducing the time window or number of articles.", file=sys.stderr)
-        return []
+        print(f"Error: API query timed out (>{timeout_seconds} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
+        raise APITimeoutError("API query timed out")
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
         return []
@@ -300,6 +314,13 @@ def main():
             args.recency_minutes = 1440  # Limit to 1 day
             print(f"Fast mode: Reduced time window from {original_minutes//1440} days to 1 day", file=sys.stderr)
         
+        # Additional optimization: if still experiencing timeouts, start smaller
+        # Based on recent API performance issues, limit to 8 hours for ultra-fast mode
+        if args.recency_minutes > 480:  # More than 8 hours
+            original_minutes = args.recency_minutes
+            args.recency_minutes = 480  # Limit to 8 hours for better reliability
+            print(f"Fast mode: Further reduced time window from {original_minutes} minutes ({original_minutes//60} hours) to 8 hours for better API reliability", file=sys.stderr)
+        
         # Limit max articles for faster processing
         if args.max_articles > 10:
             original_max = args.max_articles
@@ -327,10 +348,14 @@ def main():
             new_event_uris = [f"dry-run-event-{i}" for i in range(1, min(args.max_articles + 1, 4))]
             print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
         else:
-            new_event_uris = fetch_bitcoin_mining_events(
-                recency_minutes=args.recency_minutes,
-                max_events=args.max_articles
-            )
+            try:
+                new_event_uris = fetch_bitcoin_mining_events(
+                    recency_minutes=args.recency_minutes,
+                    max_events=args.max_articles
+                )
+            except APITimeoutError:
+                print("API timeout occurred - this should trigger workflow fallback", file=sys.stderr)
+                sys.exit(1)
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)

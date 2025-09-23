@@ -67,10 +67,10 @@ jobs:
             --days-back "$days_back" \
             --output-format uris \
             --fast-mode > news_uris.txt || {
-              echo "Fast mode failed, trying with smaller 8-hour window..."
+              echo "Fast mode failed, trying with smaller 2-hour window..."
               python scripts/fetch_news.py \
                 --max-articles "$max_articles" \
-                --recency-minutes 480 \
+                --recency-minutes 120 \
                 --output-format uris \
                 --fast-mode > news_uris.txt
             }
