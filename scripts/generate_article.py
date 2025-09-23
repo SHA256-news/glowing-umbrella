@@ -231,6 +231,8 @@ def get_event_details_from_cache(event_uri, cached_details):
         "summary": event_summary,
         "concepts": cached_event.get("concepts", [])
     }
+
+def get_ai_prompt(event_details):
     """Creates a detailed prompt for the Gemini model based on event details."""
     
     event_title = event_details.get('title', 'N/A')

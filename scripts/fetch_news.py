@@ -12,7 +12,7 @@ import sys
 import json
 import argparse
 from datetime import datetime, timedelta
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Tuple
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
 
 
@@ -241,7 +241,7 @@ def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool
 
 def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
                                              recency_minutes: int = 90,
-                                             max_events: int = 5) -> tuple[List[str], Dict]:
+                                             max_events: int = 5) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events with progressive fallback to smaller time windows and simpler queries.
     
@@ -251,7 +251,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
         max_events (int): Maximum number of events to fetch.
     
     Returns:
-        tuple: (List of event URIs, Dict of cached event details)
+        Tuple: (List of event URIs, Dict of cached event details)
     """
     # Progressive fallback windows (in minutes) - more granular fallbacks
     fallback_windows = [
@@ -303,7 +303,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
 def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
                                recency_minutes: int = 90,
                                max_events: int = 5,
-                               use_simple_query: bool = False) -> tuple[List[str], Dict]:
+                               use_simple_query: bool = False) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events from EventRegistry API.
     
@@ -314,7 +314,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         use_simple_query (bool): Use simplified query for better reliability.
     
     Returns:
-        tuple: (List of event URIs, Dict of cached event details)
+        Tuple: (List of event URIs, Dict of cached event details)
     """
     if not api_key:
         api_key = os.getenv('EVENTREGISTRY_API_KEY')
