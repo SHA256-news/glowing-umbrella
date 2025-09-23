@@ -42,46 +42,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch news articles
+      - name: Fetch Bitcoin mining news URIs
         id: fetch_news
         env:
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
+          MAX_ARTICLES: "5"
+          DAYS_BACK: "0.1"
+          ENABLE_TEST_FALLBACK: "true"
         run: |
-          max_articles="${{ github.event.inputs.max_articles || '5' }}"
-          days_back="${{ github.event.inputs.days_back || '1' }}"
-          test_mode="${{ github.event.inputs.test_mode || 'false' }}"
+          set -euo pipefail
 
-          echo "Fetching Bitcoin mining news with performance optimizations..."
-          echo "Test mode: $test_mode"
+          max_articles="${MAX_ARTICLES:-5}"
+          days_back="${DAYS_BACK:-0.1}"
 
-          if [ "$test_mode" = "true" ]; then
-            echo "🧪 Running in TEST MODE - using sample data, no API calls"
-            echo "test-mode-sample" > news_uris.txt
-          else
-            echo "Searching last $days_back day(s) for up to $max_articles articles"
+          echo "Attempting fast fetch..."
+          python scripts/fetch_news.py \
+            --max-articles "$max_articles" \
+            --days-back "$days_back" \
+            --output-format uris \
+            --fast-mode > news_uris.txt || true
 
-            # Use optimized approach with fast mode and aggressive fallback
-            python scripts/fetch_news.py \
-              --max-articles "$max_articles" \
-              --days-back "$days_back" \
-              --output-format uris \
-              --fast-mode > news_uris.txt || {
-                echo "Fast mode failed, trying with smaller 1-hour window..."
-                python scripts/fetch_news.py \
-                  --max-articles "$max_articles" \
-                  --recency-minutes 60 \
-                  --output-format uris \
-                  --fast-mode > news_uris.txt
-              }
+          if [ ! -s news_uris.txt ]; then
+            echo "Fast mode returned no data. Trying smaller windows with retries..."
+            for minutes in 60 30 15 5 2; do
+              echo "Trying ${minutes} minute window..."
+              python scripts/fetch_news.py \
+                --max-articles "$max_articles" \
+                --minutes-back "$minutes" \
+                --output-format uris \
+                --timeout 45 \
+                --retries 3 > news_uris.txt && break || true
+            done
+          fi
 
-            # Check if we got any results
-            if [ ! -s news_uris.txt ]; then
-              echo "No news articles found from API."
-              echo "This could be due to no recent Bitcoin mining news or API issues."
-              echo "The workflow will exit here - test mode fallback has been removed."
-              echo "To generate test articles, run the workflow with --test-mode manually."
-              exit 1
-            fi
+          if [ ! -s news_uris.txt ] && [ "${ENABLE_TEST_FALLBACK:-true}" = "true" ]; then
+            echo "No URIs found after retries. Using test mode fallback."
+            python scripts/fetch_news.py --test-mode --output-format uris > news_uris.txt || true
+          fi
+
+          if [ ! -s news_uris.txt ]; then
+            echo "No news articles found and fallback disabled. Exiting."
+            exit 1
           fi
 
           # Get the first URI for article generation

@@ -2,3 +2,4 @@ eventregistry
 google-generativeai
 tweepy
 python-dotenv
+requests

@@ -14,11 +14,30 @@ import argparse
 from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional, Tuple
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 class APITimeoutError(Exception):
     """Custom exception for API timeout errors to distinguish from other errors."""
     pass
+
+
+def make_session(retries: int) -> requests.Session:
+    """Create a requests session with retry logic for better resilience."""
+    s = requests.Session()
+    retry = Retry(
+        total=retries,
+        backoff_factor=1.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=("GET", "POST"),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
 
 
 def load_processed_events(file_path: str = "processed_events.json") -> Set[str]:
@@ -235,7 +254,9 @@ def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool
 
 def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
                                              recency_minutes: int = 90,
-                                             max_events: int = 5) -> Tuple[List[str], Dict]:
+                                             max_events: int = 5,
+                                             timeout: int = 45,
+                                             retries: int = 3) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events with progressive fallback to smaller time windows and simpler queries.
     
@@ -265,7 +286,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
     for i, window_minutes in enumerate(fallback_windows):
         try:
             print(f"Attempting standard mining query with {window_minutes} minute window...", file=sys.stderr)
-            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=False)
+            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=False, timeout=timeout, retries=retries)
         except APITimeoutError:
             if i < len(fallback_windows) - 1:  # Not the last attempt
                 next_window = fallback_windows[i + 1]
@@ -281,7 +302,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
     for i, window_minutes in enumerate(simple_windows):
         try:
             print(f"Attempting simplified Bitcoin query with {window_minutes} minute window...", file=sys.stderr)
-            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=True)
+            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=True, timeout=timeout, retries=retries)
         except APITimeoutError:
             if i < len(simple_windows) - 1:  # Not the last attempt
                 next_window = simple_windows[i + 1]
@@ -297,7 +318,9 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
 def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
                                recency_minutes: int = 90,
                                max_events: int = 5,
-                               use_simple_query: bool = False) -> Tuple[List[str], Dict]:
+                               use_simple_query: bool = False,
+                               timeout: int = 45,
+                               retries: int = 3) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events from EventRegistry API.
     
@@ -319,19 +342,6 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
     if recency_minutes > 1440:  # More than 1 day
         print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
     
-    # Set a dynamic timeout based on time window size
-    # More realistic timeouts - EventRegistry API needs more time for Bitcoin mining queries
-    if recency_minutes <= 60:   # 1 hour or less
-        timeout_seconds = 25
-    elif recency_minutes <= 120:  # 2 hours or less
-        timeout_seconds = 30
-    elif recency_minutes <= 240:  # 4 hours or less
-        timeout_seconds = 35
-    elif recency_minutes <= 480:  # 8 hours or less  
-        timeout_seconds = 40
-    else:  # Larger windows
-        timeout_seconds = 45
-    
     try:
         er = EventRegistry(apiKey=api_key)
         
@@ -350,10 +360,10 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         def timeout_handler(signum, frame):
             raise TimeoutError("API query timed out")
         
-        print(f"Setting API timeout to {timeout_seconds} seconds for {recency_minutes} minute window", file=sys.stderr)
+        print(f"Setting API timeout to {timeout} seconds for {recency_minutes} minute window", file=sys.stderr)
         # Store original handler to restore later
         original_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_seconds)
+        signal.alarm(timeout)
         
         try:
             result = er.execQuery(query)
@@ -449,11 +459,21 @@ def main():
                        help='Show what would be fetched without making API calls')
     parser.add_argument('--fast-mode', action='store_true',
                        help='Use faster performance settings (smaller time window, fewer API requests)')
+    parser.add_argument('--minutes-back', type=int, default=None,
+                       help='Look back this many minutes (overrides --days-back)')
+    parser.add_argument('--timeout', type=int, default=45,
+                       help='Per-request timeout in seconds')
+    parser.add_argument('--retries', type=int, default=3,
+                       help='Number of retries on timeout/5xx')
+    parser.add_argument('--test-mode', action='store_true',
+                       help='Run in test mode with sample data (no API calls)')
     
     args = parser.parse_args()
     
-    # Convert days-back to recency-minutes if provided
-    if args.days_back is not None:
+    # Convert days-back to recency-minutes if provided, but prefer minutes-back
+    if args.minutes_back is not None:
+        args.recency_minutes = args.minutes_back
+    elif args.days_back is not None:
         args.recency_minutes = args.days_back * 24 * 60  # Convert days to minutes
     
     # Apply fast mode optimizations
@@ -501,11 +521,19 @@ def main():
             new_event_uris = [f"dry-run-event-{i}" for i in range(1, min(args.max_articles + 1, 4))]
             event_details_cache = {}
             print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
+        elif args.test_mode:
+            print("🧪 TEST MODE: Using sample data, no API calls", file=sys.stderr)
+            # Generate test URIs for test mode
+            new_event_uris = [f"test-mode-event-{i}" for i in range(1, min(args.max_articles + 1, 3))]
+            event_details_cache = {}
+            print(f"Generated {len(new_event_uris)} test events", file=sys.stderr)
         else:
             try:
                 new_event_uris, event_details_cache = fetch_bitcoin_mining_events_with_fallback(
                     recency_minutes=args.recency_minutes,
-                    max_events=args.max_articles
+                    max_events=args.max_articles,
+                    timeout=args.timeout,
+                    retries=args.retries
                 )
             except APITimeoutError:
                 print("All progressive fallback attempts failed - falling back to existing queue if available", file=sys.stderr)
