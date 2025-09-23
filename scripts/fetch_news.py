@@ -80,12 +80,13 @@ def save_events_queue(event_uris: List[str], file_path: str = "events.json") -> 
         sys.exit(1)
 
 
-def build_bitcoin_mining_query(recency_minutes: int = 90) -> QueryEvents:
+def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -> QueryEvents:
     """
     Build EventRegistry query for Bitcoin mining news events.
     
     Args:
         recency_minutes (int): How far back to look for events in minutes.
+        max_events (int): Maximum number of events needed (to optimize API request).
     
     Returns:
         QueryEvents: Configured query for Bitcoin mining events.
@@ -94,37 +95,33 @@ def build_bitcoin_mining_query(recency_minutes: int = 90) -> QueryEvents:
     end_date = datetime.now()
     start_date = end_date - timedelta(minutes=recency_minutes)
     
-    # Keywords to include (Bitcoin mining related)
-    include_keywords = [
-        "bitcoin mining", "hashrate", "ASIC", "mining pools", "foundry",
-        "block subsidy", "difficulty adjustment", "bitcoin price", 
-        "bitcoin trading", "bitcoin ETF", "bitcoin investment", 
-        "bitcoin speculation", "mining hardware", "mining farm",
-        "bitcoin miner", "proof of work", "mining difficulty"
-    ]
+    # Limit very large time windows for performance
+    max_days = 30  # Maximum 30 days for performance
+    max_minutes = max_days * 24 * 60
+    if recency_minutes > max_minutes:
+        print(f"Warning: Large time window ({recency_minutes} minutes = {recency_minutes//1440} days). "
+              f"Limiting to {max_days} days for performance.", file=sys.stderr)
+        recency_minutes = max_minutes
+        start_date = end_date - timedelta(minutes=recency_minutes)
     
-    # Build query with Bitcoin mining focus
-    # Use OR for broader search, then filter more specifically afterwards
-    core_bitcoin_terms = ["bitcoin mining", "bitcoin miner", "bitcoin"]
-    secondary_terms = ["hashrate", "ASIC", "mining pools", "mining difficulty", "proof of work"]
-    
+    # Use simpler keyword strategy for better performance
+    # Focus on most specific terms first
     query = QueryEvents(
         keywords=QueryItems.OR([
-            QueryItems.AND([core_bitcoin_terms[0]]),  # "bitcoin mining"
-            QueryItems.AND([core_bitcoin_terms[1]]),  # "bitcoin miner" 
-            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[0]]),  # "bitcoin" AND "hashrate"
-            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[1]]),  # "bitcoin" AND "ASIC"
-            QueryItems.AND([core_bitcoin_terms[2], secondary_terms[2]]),  # "bitcoin" AND "mining pools"
+            "bitcoin mining",    # Most specific term
+            "bitcoin miner",     # Second most specific
+            QueryItems.AND(["bitcoin", "hashrate"]),    # Bitcoin + mining indicator
+            QueryItems.AND(["bitcoin", "ASIC"]),        # Bitcoin + mining hardware
         ]),
         dateStart=start_date.date(),
         dateEnd=end_date.date(),
         lang="eng",  # English language
-        minArticlesInEvent=1,  # Reduced from 2 to find more events
-        maxArticlesInEvent=50,  # Reasonable upper bound
+        minArticlesInEvent=1,  # Allow single-article events
+        maxArticlesInEvent=20,  # Reduced upper bound for performance
         requestedResult=RequestEventsInfo(
             page=1,
-            count=30,  # Increased from 20 to get more events to filter from
-            sortBy="relevance",
+            count=min(max_events * 3, 15),  # Request only ~3x what we need, max 15
+            sortBy="date",  # Sort by date for most recent first
             returnInfo=None  # Use default return info
         )
     )
@@ -132,54 +129,58 @@ def build_bitcoin_mining_query(recency_minutes: int = 90) -> QueryEvents:
     return query
 
 
-def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool = True) -> List[Dict]:
+def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool = True, max_events: int = 5) -> List[Dict]:
     """
     Filter events to focus on Bitcoin-only mining, excluding other cryptocurrencies.
+    Optimized to stop processing once we have enough events.
     
     Args:
         events (List[Dict]): List of events from EventRegistry.
         exclude_other_cryptos (bool): Whether to exclude other cryptocurrency mentions.
+        max_events (int): Maximum number of events needed (for early termination).
     
     Returns:
         List[Dict]: Filtered events focused on Bitcoin mining.
     """
-    # Other cryptocurrency names and tickers to exclude
+    # Prioritized other cryptocurrency terms to exclude (most common first)
     exclude_crypto_terms = [
-        "ethereum", "ETH", "litecoin", "LTC", "dogecoin", "DOGE", 
-        "cardano", "ADA", "polygon", "MATIC", "solana", "SOL",
-        "ripple", "XRP", "chainlink", "LINK", "polkadot", "DOT",
-        "avalanche", "AVAX", "cosmos", "ATOM", "algorand", "ALGO",
-        "stellar", "XLM", "monero", "XMR", "zcash", "ZEC",
-        "dash", "DASH", "bitcoin cash", "BCH", "bitcoin SV", "BSV"
+        "ethereum", "ETH", "bitcoin cash", "BCH", "litecoin", "LTC", 
+        "dogecoin", "DOGE", "solana", "SOL", "cardano", "ADA",
+        "ripple", "XRP", "polygon", "MATIC", "avalanche", "AVAX"
     ]
     
-    # Bitcoin mining specific terms that should be present
-    bitcoin_mining_terms = [
-        "bitcoin", "mining", "hash", "ASIC", "miner", "pool",
-        "difficulty", "subsidy", "proof of work", "SHA-256"
-    ]
+    # Essential Bitcoin mining terms (simplified for performance)
+    bitcoin_terms = ["bitcoin", "mining", "miner", "hashrate", "ASIC"]
     
     filtered_events = []
     
     for event in events:
+        # Early termination if we have enough events
+        if len(filtered_events) >= max_events * 2:  # Get 2x to allow for further filtering
+            break
+            
         title = event.get('title', {}).get('eng', '').lower()
         summary = event.get('summary', {}).get('eng', '').lower()
         combined_text = f"{title} {summary}"
         
-        # Check if it mentions Bitcoin mining concepts
-        has_bitcoin_mining = any(term.lower() in combined_text for term in bitcoin_mining_terms)
-        
-        if not has_bitcoin_mining:
+        # Quick Bitcoin check first (most efficient)
+        if 'bitcoin' not in combined_text:
+            continue
+            
+        # Check for mining relevance
+        has_mining_context = any(term in combined_text for term in ['mining', 'miner', 'hashrate', 'asic'])
+        if not has_mining_context:
             continue
         
-        # Exclude if it mentions other cryptocurrencies (unless it's clearly Bitcoin-focused)
+        # Quick exclusion check (only if needed)
         if exclude_other_cryptos:
-            bitcoin_mentions = combined_text.count('bitcoin')
-            other_crypto_mentions = sum(1 for term in exclude_crypto_terms 
-                                      if term.lower() in combined_text)
+            bitcoin_count = combined_text.count('bitcoin')
+            # Check only most common competing cryptos for performance
+            other_crypto_count = sum(1 for term in exclude_crypto_terms[:8] 
+                                   if term.lower() in combined_text)
             
-            # Skip if other cryptos are mentioned more than Bitcoin
-            if other_crypto_mentions > 0 and bitcoin_mentions <= other_crypto_mentions:
+            # Skip if other cryptos dominate
+            if other_crypto_count > 0 and bitcoin_count <= other_crypto_count:
                 continue
         
         filtered_events.append(event)
@@ -206,15 +207,31 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         if not api_key:
             raise ValueError("EventRegistry API key not provided. Set EVENTREGISTRY_API_KEY environment variable.")
     
+    # Performance warning for large time windows
+    if recency_minutes > 1440:  # More than 1 day
+        print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
+    
     try:
         er = EventRegistry(apiKey=api_key)
         
-        # Build and execute query
-        query = build_bitcoin_mining_query(recency_minutes)
+        # Build and execute query with optimized parameters
+        query = build_bitcoin_mining_query(recency_minutes, max_events)
         print(f"Fetching Bitcoin mining events from last {recency_minutes} minutes...", file=sys.stderr)
+        print(f"Query optimization: requesting {query.requestedResult.count} events for {max_events} target", file=sys.stderr)
         
-        # Execute query
-        result = er.execQuery(query)
+        # Execute query with timeout handling
+        import signal
+        def timeout_handler(signum, frame):
+            raise TimeoutError("API query timed out")
+        
+        # Set a reasonable timeout (30 seconds)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(30)
+        
+        try:
+            result = er.execQuery(query)
+        finally:
+            signal.alarm(0)  # Cancel the alarm
         
         if not result or 'events' not in result:
             print("No events found in API response", file=sys.stderr)
@@ -223,8 +240,8 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         events = result['events']['results']
         print(f"Found {len(events)} raw events from EventRegistry", file=sys.stderr)
         
-        # Filter for Bitcoin-only mining events
-        filtered_events = filter_bitcoin_mining_events(events)
+        # Filter for Bitcoin-only mining events with early termination
+        filtered_events = filter_bitcoin_mining_events(events, exclude_other_cryptos=True, max_events=max_events)
         print(f"Filtered to {len(filtered_events)} Bitcoin mining events", file=sys.stderr)
         
         # Extract event URIs and limit to max_events
@@ -238,6 +255,9 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         
         return event_uris
         
+    except TimeoutError:
+        print("Error: API query timed out (>30 seconds). Try reducing the time window or number of articles.", file=sys.stderr)
+        return []
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
         return []
@@ -251,7 +271,7 @@ def main():
     parser.add_argument('--recency-minutes', type=int, default=90,
                        help='How far back to look for events in minutes (default: 90)')
     parser.add_argument('--days-back', type=int,
-                       help='Number of days back to search (converted to minutes)')
+                       help='Number of days back to search (converted to minutes). Warning: Large values cause slow performance!')
     parser.add_argument('--output', default='events.json',
                        help='Output file for event queue (default: events.json)')
     parser.add_argument('--output-format', choices=['json', 'uris'], default='json',
@@ -262,12 +282,29 @@ def main():
                        help='Skip deduplication and fetch events anyway')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without making API calls')
+    parser.add_argument('--fast-mode', action='store_true',
+                       help='Use faster performance settings (smaller time window, fewer API requests)')
     
     args = parser.parse_args()
     
     # Convert days-back to recency-minutes if provided
     if args.days_back is not None:
         args.recency_minutes = args.days_back * 24 * 60  # Convert days to minutes
+    
+    # Apply fast mode optimizations
+    if args.fast_mode:
+        print("🚀 FAST MODE: Using performance optimizations", file=sys.stderr)
+        # Limit to more reasonable time windows for speed
+        if args.recency_minutes > 1440:  # More than 1 day
+            original_minutes = args.recency_minutes
+            args.recency_minutes = 1440  # Limit to 1 day
+            print(f"Fast mode: Reduced time window from {original_minutes//1440} days to 1 day", file=sys.stderr)
+        
+        # Limit max articles for faster processing
+        if args.max_articles > 10:
+            original_max = args.max_articles
+            args.max_articles = 10
+            print(f"Fast mode: Reduced max articles from {original_max} to 10", file=sys.stderr)
     
     try:
         # Load existing processed events for deduplication
