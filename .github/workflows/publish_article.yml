@@ -66,8 +66,8 @@ jobs:
         # Check if we got any results
         if [ ! -s news_uris.txt ]; then
           echo "No news articles found."
-          echo "Generating a sample article in test mode instead..."
-          echo "test-mode-sample" > news_uris.txt
+          echo "Generating article using real APIs with general Bitcoin mining topic..."
+          echo "general-bitcoin-mining-topic" > news_uris.txt
         fi
         
         # Get the first URI for article generation
@@ -91,7 +91,7 @@ jobs:
         echo "Generating article for URI: ${{ steps.fetch_news.outputs.first_uri }}"
         
         # Check if we're using test mode fallback
-        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "test-mode-sample" ]; then
+        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "general-bitcoin-mining-topic" ]; then
           echo "No recent events found, but APIs are available - generating article using real APIs with fallback topic"
           # Create a dummy events.json with test URI but use real APIs
           echo '{"event_uris": ["general-bitcoin-mining-topic"], "updated_at": "'$(date -Iseconds)'", "total_events": 1}' > events.json
@@ -103,7 +103,7 @@ jobs:
         fi
         
         # Verify the article was generated and copy to expected location
-        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "test-mode-sample" ] || [ -n "$(ls -A articles/ 2>/dev/null)" ]; then
+        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "general-bitcoin-mining-topic" ] || [ -n "$(ls -A articles/ 2>/dev/null)" ]; then
           # Find the most recently created article file
           latest_article=$(ls -t articles/*.json 2>/dev/null | head -n 1)
           if [ -n "$latest_article" ]; then
