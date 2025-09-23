@@ -217,7 +217,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         # Build and execute query with optimized parameters
         query = build_bitcoin_mining_query(recency_minutes, max_events)
         print(f"Fetching Bitcoin mining events from last {recency_minutes} minutes...", file=sys.stderr)
-        print(f"Query optimization: requesting {query.requestedResult.count} events for {max_events} target", file=sys.stderr)
+        print(f"Query optimization: requesting up to {min(max_events * 3, 15)} events for {max_events} target", file=sys.stderr)
         
         # Execute query with timeout handling
         import signal
