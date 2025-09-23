@@ -92,10 +92,11 @@ jobs:
         
         # Check if we're using test mode fallback
         if [ "${{ steps.fetch_news.outputs.first_uri }}" = "test-mode-sample" ]; then
-          echo "Using test mode for article generation due to no events found"
-          # Create a dummy events.json with test URI for test mode
-          echo '{"event_uris": ["test-mode-sample"], "updated_at": "'$(date -Iseconds)'", "total_events": 1}' > events.json
-          python scripts/generate_article.py --test-mode
+          echo "No recent events found, but APIs are available - generating article using real APIs with fallback topic"
+          # Create a dummy events.json with test URI but use real APIs
+          echo '{"event_uris": ["general-bitcoin-mining-topic"], "updated_at": "'$(date -Iseconds)'", "total_events": 1}' > events.json
+          # Use real APIs even when no events found - the script will handle the fallback
+          python scripts/generate_article.py
         else
           # Events should already be in events.json from fetch step
           python scripts/generate_article.py
@@ -138,7 +139,7 @@ jobs:
 
           ## Article Content
 
-          ${articleData.content}
+          ${articleData.body}
 
           ## Key Points
 
@@ -148,7 +149,7 @@ jobs:
 
           - **Generated At:** ${articleData.generated_at}
           - **Source Event URI:** ${articleData.source_event_uri}
-          - **Model Used:** ${articleData.model_used}
+          - **Model Used:** ${articleData.model_used || 'gemini-pro'}
           - **Tags:** ${articleData.tags ? articleData.tags.join(', ') : 'N/A'}
 
           ---

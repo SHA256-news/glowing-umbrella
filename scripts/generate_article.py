@@ -282,20 +282,37 @@ def main():
                 print(f"  Sample article generated successfully")
             else:
                 # Real API mode
-                # 1. Fetch event details from Event Registry with timeout
-                print(f"  Fetching event details from EventRegistry...")
-                result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
-                
-                if not result or not result.get('event'):
-                    raise ValueError("No event information found for this event URI.")
-                
-                event_info = result['event']
-                event_details = {
-                    "title": event_info.get("title", {}).get("eng", "No Title Provided"),
-                    "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
-                    "concepts": event_info.get("concepts", [])
-                }
-                print(f"  Event title: {event_details['title'][:100]}...")
+                if event_uri == "general-bitcoin-mining-topic":
+                    # Special case: No recent events found, but use real APIs for general Bitcoin mining content
+                    print(f"  No recent events found, generating general Bitcoin mining article using real APIs...")
+                    event_details = {
+                        "title": "Bitcoin Mining Industry Analysis and Market Trends",
+                        "summary": "Current state and analysis of the Bitcoin mining ecosystem, including recent developments in mining technology, network security, and market dynamics.",
+                        "concepts": [
+                            {"label": "Bitcoin mining"},
+                            {"label": "Mining difficulty"},
+                            {"label": "Hash rate"},
+                            {"label": "Cryptocurrency"},
+                            {"label": "Network security"}
+                        ]
+                    }
+                    print(f"  Using general Bitcoin mining topic for article generation")
+                else:
+                    # Regular event processing
+                    # 1. Fetch event details from Event Registry with timeout
+                    print(f"  Fetching event details from EventRegistry...")
+                    result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
+                    
+                    if not result or not result.get('event'):
+                        raise ValueError("No event information found for this event URI.")
+                    
+                    event_info = result['event']
+                    event_details = {
+                        "title": event_info.get("title", {}).get("eng", "No Title Provided"),
+                        "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
+                        "concepts": event_info.get("concepts", [])
+                    }
+                    print(f"  Event title: {event_details['title'][:100]}...")
 
                 # 2. Generate article using Gemini
                 print(f"  Generating article with Gemini AI...")
@@ -320,6 +337,7 @@ def main():
             final_output = {
                 "source_event_uri": event_uri,
                 "generated_at": datetime.now().isoformat(),
+                "model_used": "gemini-pro" if not args.test_mode else "test-mode",
                 **article_data
             }
             write_json_file(filepath, final_output)
