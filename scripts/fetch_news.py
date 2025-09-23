@@ -16,6 +16,11 @@ from typing import List, Dict, Set, Optional
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
 
 
+class APITimeoutError(Exception):
+    """Custom exception for API timeout errors to distinguish from other errors."""
+    pass
+
+
 def load_processed_events(file_path: str = "processed_events.json") -> Set[str]:
     """
     Load previously processed event URIs from file.
@@ -257,7 +262,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         
     except TimeoutError:
         print("Error: API query timed out (>30 seconds). Try reducing the time window or number of articles.", file=sys.stderr)
-        return []
+        raise APITimeoutError("API query timed out")
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
         return []
@@ -327,10 +332,14 @@ def main():
             new_event_uris = [f"dry-run-event-{i}" for i in range(1, min(args.max_articles + 1, 4))]
             print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
         else:
-            new_event_uris = fetch_bitcoin_mining_events(
-                recency_minutes=args.recency_minutes,
-                max_events=args.max_articles
-            )
+            try:
+                new_event_uris = fetch_bitcoin_mining_events(
+                    recency_minutes=args.recency_minutes,
+                    max_events=args.max_articles
+                )
+            except APITimeoutError:
+                print("API timeout occurred - this should trigger workflow fallback", file=sys.stderr)
+                sys.exit(1)
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)
