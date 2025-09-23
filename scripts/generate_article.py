@@ -13,6 +13,7 @@ import re
 import sys
 import signal
 import argparse
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from eventregistry import EventRegistry, QueryEvent, RequestEventInfo
@@ -103,6 +104,38 @@ def add_failed_event(event_uri, error_message):
         'total_failed': len(failed_events)
     }
     write_json_file(FAILED_EVENTS_FILE, data)
+
+def write_placeholder(path="generated_article.json"):
+    """Write a placeholder article when no events were processed."""
+    doc = {
+        "title": "No Recent Bitcoin Mining News", 
+        "headline": "No Recent Bitcoin Mining News",
+        "subtitle": "The news API returned no recent Bitcoin mining events during this run.",
+        "content": "We'll publish again automatically once fresh mining news becomes available.",
+        "created_at": int(time.time()),
+        "generated_at": datetime.now().isoformat(),
+        "body": "We'll publish again automatically once fresh mining news becomes available.",
+        "key_points": [
+            "No recent Bitcoin mining news found in current search window",
+            "Automated system will retry on next scheduled run",
+            "This is normal during periods of low mining-specific news activity"
+        ],
+        "tags": ["bitcoin", "mining", "automated", "placeholder"],
+        "model_used": "placeholder-generator",
+        "source_event_uri": "placeholder"
+    }
+    
+    # Also write to articles directory for workflow compatibility
+    os.makedirs(ARTICLES_DIR, exist_ok=True)
+    article_filename = os.path.join(ARTICLES_DIR, f"placeholder-article-{int(time.time())}.json")
+    
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=2)
+    with open(article_filename, "w") as f:
+        json.dump(doc, f, indent=2)
+        
+    print(f"Wrote placeholder article to {path}")
+    print(f"Also wrote to {article_filename} for workflow compatibility")
 
 def sanitize_filename(headline):
     """Sanitizes a string to be a valid filename."""
@@ -308,7 +341,13 @@ def main():
 
     if not event_uris:
         print("No new events to process.")
-        return
+        # Check if we should write a placeholder article
+        if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+            print("Writing placeholder article due to no events.")
+            write_placeholder()
+            sys.exit(0)
+        else:
+            return
 
     print(f"Found {len(event_uris)} events to process.")
     
@@ -481,19 +520,32 @@ def main():
     if remaining_events:
         print(f"Remaining in queue: {len(remaining_events)} events")
 
-    # If no events were successfully processed, exit with error
+    # If no events were successfully processed, handle accordingly
     if processed_count == 0 and len(event_uris) > 0:
-        print(f"\nError: Failed to process any of the {len(event_uris)} events.")
-        print("This could be due to:")
-        print("- Invalid or expired event URIs")
-        print("- EventRegistry API issues")
-        print("- Gemini API issues")
-        print("- Network connectivity problems")
-        print("\nCheck the failed_events.json file for detailed error information.")
-        sys.exit(1)
+        # Events existed but all failed to process
+        if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+            print(f"\nNo events successfully processed out of {len(event_uris)} events.")
+            print("Writing placeholder article due to processing failures.")
+            write_placeholder()
+            sys.exit(0)
+        else:
+            print(f"\nError: Failed to process any of the {len(event_uris)} events.")
+            print("This could be due to:")
+            print("- Invalid or expired event URIs")
+            print("- EventRegistry API issues")
+            print("- Gemini API issues")
+            print("- Network connectivity problems")
+            print("\nCheck the failed_events.json file for detailed error information.")
+            sys.exit(1)
     elif processed_count == 0:
-        print("\nNo events found to process. This is normal if the queue is empty.")
-        return
+        # No events to process at all
+        if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+            print("\nNo events found to process. Writing placeholder article.")
+            write_placeholder()
+            sys.exit(0)
+        else:
+            print("\nNo events found to process. This is normal if the queue is empty.")
+            return
     else:
         print(f"\nSuccessfully processed {processed_count} out of {len(event_uris)} events.")
 
