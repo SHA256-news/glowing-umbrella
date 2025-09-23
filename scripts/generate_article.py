@@ -28,7 +28,7 @@ ARTICLES_DIR = os.path.join(BASE_DIR, 'articles')
 
 # Load API keys from .env file
 load_dotenv()
-EVENT_REGISTRY_API_KEY = os.getenv("EVENT_REGISTRY_API_KEY")
+EVENT_REGISTRY_API_KEY = os.getenv("EVENTREGISTRY_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- Helper Functions ---

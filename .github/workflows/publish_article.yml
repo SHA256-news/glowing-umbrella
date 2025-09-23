@@ -16,6 +16,11 @@ on:
         required: false
         default: '1'  # Reduced from 7 to 1 for much better performance
         type: string
+      test_mode:
+        description: 'Run in test mode with sample data (no API calls)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   PYTHON_VERSION: '3.12'
@@ -45,29 +50,39 @@ jobs:
       run: |
         max_articles="${{ github.event.inputs.max_articles || '5' }}"
         days_back="${{ github.event.inputs.days_back || '1' }}"  # Performance: default to 1 day
+        test_mode="${{ github.event.inputs.test_mode || 'false' }}"
         
         echo "Fetching Bitcoin mining news with performance optimizations..."
-        echo "Searching last $days_back day(s) for up to $max_articles articles"
+        echo "Test mode: $test_mode"
         
-        # Use optimized approach with fast mode and fallback
-        python scripts/fetch_news.py \
-          --max-articles "$max_articles" \
-          --days-back "$days_back" \
-          --output-format uris \
-          --fast-mode > news_uris.txt || {
-            echo "Fast mode failed, trying with smaller 8-hour window..."
-            python scripts/fetch_news.py \
-              --max-articles "$max_articles" \
-              --recency-minutes 480 \
-              --output-format uris \
-              --fast-mode > news_uris.txt
-          }
-        
-        # Check if we got any results
-        if [ ! -s news_uris.txt ]; then
-          echo "No news articles found."
-          echo "Generating a sample article in test mode instead..."
+        if [ "$test_mode" = "true" ]; then
+          echo "🧪 Running in TEST MODE - using sample data, no API calls"
           echo "test-mode-sample" > news_uris.txt
+        else
+          echo "Searching last $days_back day(s) for up to $max_articles articles"
+          
+          # Use optimized approach with fast mode and fallback
+          python scripts/fetch_news.py \
+            --max-articles "$max_articles" \
+            --days-back "$days_back" \
+            --output-format uris \
+            --fast-mode > news_uris.txt || {
+              echo "Fast mode failed, trying with smaller 8-hour window..."
+              python scripts/fetch_news.py \
+                --max-articles "$max_articles" \
+                --recency-minutes 480 \
+                --output-format uris \
+                --fast-mode > news_uris.txt
+            }
+          
+          # Check if we got any results
+          if [ ! -s news_uris.txt ]; then
+            echo "No news articles found from API."
+            echo "This could be due to no recent Bitcoin mining news or API issues."
+            echo "The workflow will exit here - test mode fallback has been removed."
+            echo "To generate test articles, run the workflow with --test-mode manually."
+            exit 1
+          fi
         fi
         
         # Get the first URI for article generation
@@ -89,10 +104,10 @@ jobs:
         fi
         
         echo "Generating article for URI: ${{ steps.fetch_news.outputs.first_uri }}"
+        test_mode="${{ github.event.inputs.test_mode || 'false' }}"
         
-        # Check if we're using test mode fallback
-        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "test-mode-sample" ]; then
-          echo "Using test mode for article generation due to no events found"
+        if [ "$test_mode" = "true" ]; then
+          echo "🧪 Using test mode for article generation"
           # Create a dummy events.json with test URI for test mode
           echo '{"event_uris": ["test-mode-sample"], "updated_at": "'$(date -Iseconds)'", "total_events": 1}' > events.json
           python scripts/generate_article.py --test-mode
@@ -102,7 +117,7 @@ jobs:
         fi
         
         # Verify the article was generated and copy to expected location
-        if [ "${{ steps.fetch_news.outputs.first_uri }}" = "test-mode-sample" ] || [ -n "$(ls -A articles/ 2>/dev/null)" ]; then
+        if [ -n "$(ls -A articles/ 2>/dev/null)" ]; then
           # Find the most recently created article file
           latest_article=$(ls -t articles/*.json 2>/dev/null | head -n 1)
           if [ -n "$latest_article" ]; then
