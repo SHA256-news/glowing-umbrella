@@ -53,6 +53,11 @@ def load_events_queue():
     data = read_json_file(EVENTS_FILE, default_value={'event_uris': [], 'total_events': 0})
     return data.get('event_uris', [])
 
+def load_cached_event_details():
+    """Load cached event details from the queue file."""
+    data = read_json_file(EVENTS_FILE, default_value={})
+    return data.get('event_details_cache', {})
+
 def save_events_queue(event_uris):
     """Save remaining events back to the queue in the format used by fetch_news.py."""
     data = {
@@ -111,15 +116,74 @@ def timeout_handler(signum, frame):
     raise TimeoutError("API call timed out")
 
 def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
-    """Fetch event details with timeout."""
+    """Fetch event details with timeout and better error handling."""
     # Set up timeout handler and store original
     original_handler = signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(timeout_seconds)
     
     try:
-        q = QueryEvent(event_uri, requestedResult=RequestEventInfo())
-        result = er.execQuery(q)
-        return result
+        # Try different query methods for better compatibility
+        print(f"    Attempting to fetch details for event URI: {event_uri}")
+        
+        # Method 1: Basic query with comprehensive return info
+        try:
+            q = QueryEvent(event_uri, requestedResult=RequestEventInfo(
+                returnInfo=RequestEventInfo.ReturnInfo(
+                    eventInfo=["title", "summary", "concepts", "uri", "lang", "articleCounts"]
+                )
+            ))
+            result = er.execQuery(q)
+            
+            if result and 'event' in result and result['event']:
+                print(f"    Successfully retrieved event details")
+                return result
+            else:
+                print(f"    Method 1: No event data in response")
+                
+        except Exception as e:
+            print(f"    Method 1 failed: {e}")
+        
+        # Method 2: Simple query without specific return info
+        try:
+            print(f"    Trying alternative query method...")
+            q = QueryEvent(event_uri)
+            q.setRequestedResult(RequestEventInfo())
+            result = er.execQuery(q)
+            
+            if result and 'event' in result and result['event']:
+                print(f"    Successfully retrieved event details with method 2")
+                return result
+            else:
+                print(f"    Method 2: No event data in response")
+                
+        except Exception as e:
+            print(f"    Method 2 failed: {e}")
+        
+        # Method 3: Check if URI format needs modification
+        # Sometimes URIs need to be prefixed or have different formats
+        modified_uri = event_uri
+        if not event_uri.startswith('eng-') and not event_uri.startswith('http'):
+            modified_uri = f"eng-{event_uri}"
+            print(f"    Trying with modified URI: {modified_uri}")
+            try:
+                q = QueryEvent(modified_uri, requestedResult=RequestEventInfo())
+                result = er.execQuery(q)
+                
+                if result and 'event' in result and result['event']:
+                    print(f"    Successfully retrieved event details with modified URI")
+                    return result
+                else:
+                    print(f"    Method 3: No event data with modified URI")
+                    
+            except Exception as e:
+                print(f"    Method 3 failed: {e}")
+        
+        # If all methods failed, raise a descriptive error
+        raise ValueError(f"No event information found for URI '{event_uri}'. "
+                        f"This could indicate: 1) The event has expired or been removed, "
+                        f"2) The URI format is invalid, 3) API access issues, or "
+                        f"4) The event is too recent and not yet fully indexed.")
+        
     except TimeoutError:
         raise TimeoutError(f"EventRegistry API call timed out after {timeout_seconds} seconds")
     except Exception as e:
@@ -128,6 +192,45 @@ def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
         # Always cancel the alarm and restore original handler
         signal.alarm(0)
         signal.signal(signal.SIGALRM, original_handler)
+
+def get_event_details_from_cache(event_uri, cached_details):
+    """Get event details from cache with proper format handling."""
+    if event_uri not in cached_details:
+        return None
+    
+    cached_event = cached_details[event_uri]
+    print(f"    Using cached event details from fetch phase")
+    
+    # Extract title and summary with better handling of nested structures
+    event_title = "No Title Provided"
+    event_summary = "No Summary Provided"
+    
+    # Handle title extraction (can be string or dict)
+    title_data = cached_event.get("title", {})
+    if isinstance(title_data, dict):
+        event_title = title_data.get("eng", title_data.get("en", 
+            list(title_data.values())[0] if title_data else "No Title Provided"))
+    elif isinstance(title_data, str):
+        event_title = title_data
+    
+    # Handle summary extraction (can be string or dict)
+    summary_data = cached_event.get("summary", {})
+    if isinstance(summary_data, dict):
+        event_summary = summary_data.get("eng", summary_data.get("en",
+            list(summary_data.values())[0] if summary_data else "No Summary Provided"))
+    elif isinstance(summary_data, str):
+        event_summary = summary_data
+    
+    # If still no useful data, mark as unavailable but don't fail
+    if event_title == "No Title Provided" and event_summary == "No Summary Provided":
+        event_title = f"Bitcoin Mining News Event ({event_uri})"
+        event_summary = "Event details not available from cache."
+    
+    return {
+        "title": event_title,
+        "summary": event_summary,
+        "concepts": cached_event.get("concepts", [])
+    }
 
 def get_ai_prompt(event_details):
     """Creates a detailed prompt for the Gemini model based on event details."""
@@ -202,6 +305,10 @@ def main():
 
     # Load event URIs from the queue
     event_uris = load_events_queue()
+    cached_event_details = load_cached_event_details()
+    
+    if cached_event_details:
+        print(f"Loaded cached details for {len(cached_event_details)} events as fallback")
 
     if not event_uris:
         print("No new events to process.")
@@ -255,25 +362,76 @@ def main():
                 print(f"  Sample article generated successfully")
             else:
                 # Real API mode
-                # 1. Fetch event details from Event Registry with timeout
+                # 1. Try to fetch event details from Event Registry with timeout
                 print(f"  Fetching event details from EventRegistry...")
-                result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
+                event_details = None
                 
-                if not result or not result.get('event'):
-                    raise ValueError(f"No event information found for this event URI. This could be due to the event being expired, removed, or the URI being invalid. Event URI: {event_uri}")
+                try:
+                    result = fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30)
+                    
+                    if not result or not result.get('event'):
+                        print(f"    API returned no event data, trying cache fallback...")
+                        event_details = get_event_details_from_cache(event_uri, cached_event_details)
+                        if not event_details:
+                            raise ValueError(f"No event information found via API or cache for URI: {event_uri}")
+                    else:
+                        event_info = result['event']
+                        print(f"    Raw event info keys: {list(event_info.keys())}")
+                        
+                        # Extract title and summary with better handling of nested structures
+                        event_title = "No Title Provided"
+                        event_summary = "No Summary Provided"
+                        
+                        # Handle title extraction (can be string or dict)
+                        title_data = event_info.get("title", {})
+                        if isinstance(title_data, dict):
+                            event_title = title_data.get("eng", title_data.get("en", 
+                                list(title_data.values())[0] if title_data else "No Title Provided"))
+                        elif isinstance(title_data, str):
+                            event_title = title_data
+                        
+                        # Handle summary extraction (can be string or dict)
+                        summary_data = event_info.get("summary", {})
+                        if isinstance(summary_data, dict):
+                            event_summary = summary_data.get("eng", summary_data.get("en",
+                                list(summary_data.values())[0] if summary_data else "No Summary Provided"))
+                        elif isinstance(summary_data, str):
+                            event_summary = summary_data
+                        
+                        # Validate that we have minimum required information
+                        if event_title == "No Title Provided" and event_summary == "No Summary Provided":
+                            # Try alternative field names
+                            event_title = str(event_info.get("eventTitle", event_info.get("headline", "No Title Provided")))
+                            event_summary = str(event_info.get("eventSummary", event_info.get("description", 
+                                                             event_info.get("snippet", "No Summary Provided"))))
+                        
+                        if event_title == "No Title Provided" and event_summary == "No Summary Provided":
+                            print(f"    API data insufficient, trying cache fallback...")
+                            event_details = get_event_details_from_cache(event_uri, cached_event_details)
+                            if not event_details:
+                                available_fields = list(event_info.keys())
+                                print(f"    Available event fields: {available_fields}")
+                                raise ValueError(f"Event found but contains insufficient information. "
+                                               f"Available fields: {available_fields}. Event URI: {event_uri}")
+                        else:
+                            event_details = {
+                                "title": event_title,
+                                "summary": event_summary,
+                                "concepts": event_info.get("concepts", [])
+                            }
                 
-                event_info = result['event']
+                except Exception as api_error:
+                    print(f"    API error: {api_error}")
+                    print(f"    Trying cache fallback...")
+                    event_details = get_event_details_from_cache(event_uri, cached_event_details)
+                    if not event_details:
+                        raise ValueError(f"Failed to get event details via API ({api_error}) and no cache available for URI: {event_uri}")
                 
-                # Validate that we have minimum required information
-                if not event_info.get("title") and not event_info.get("summary"):
-                    raise ValueError(f"Event found but contains insufficient information (no title or summary). Event URI: {event_uri}")
+                if not event_details:
+                    raise ValueError(f"No event details available from any source for URI: {event_uri}")
                 
-                event_details = {
-                    "title": event_info.get("title", {}).get("eng", "No Title Provided"),
-                    "summary": event_info.get("summary", {}).get("eng", "No Summary Provided"),
-                    "concepts": event_info.get("concepts", [])
-                }
                 print(f"  Event title: {event_details['title'][:100]}...")
+                print(f"  Event summary: {event_details['summary'][:100]}...")
 
                 # 2. Generate article using Gemini
                 print(f"  Generating article with Gemini AI...")

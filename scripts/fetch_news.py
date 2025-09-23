@@ -12,7 +12,7 @@ import sys
 import json
 import argparse
 from datetime import datetime, timedelta
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Tuple
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
 
 
@@ -63,13 +63,14 @@ def load_existing_queue(file_path: str = "events.json") -> List[str]:
         return []
 
 
-def save_events_queue(event_uris: List[str], file_path: str = "events.json") -> None:
+def save_events_queue(event_uris: List[str], file_path: str = "events.json", event_details_cache: Dict = None) -> None:
     """
     Save event URIs to the queue file.
     
     Args:
         event_uris (List[str]): List of event URIs to save.
         file_path (str): Path to the events queue file.
+        event_details_cache (Dict): Cached event details for fallback.
     """
     try:
         data = {
@@ -77,9 +78,16 @@ def save_events_queue(event_uris: List[str], file_path: str = "events.json") -> 
             'updated_at': datetime.now().isoformat(),
             'total_events': len(event_uris)
         }
+        
+        # Add cached event details if provided
+        if event_details_cache:
+            data['event_details_cache'] = event_details_cache
+            
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         print(f"Saved {len(event_uris)} events to queue: {file_path}", file=sys.stderr)
+        if event_details_cache:
+            print(f"Cached details for {len(event_details_cache)} events for fallback use", file=sys.stderr)
     except IOError as e:
         print(f"Error saving events queue: {e}", file=sys.stderr)
         sys.exit(1)
@@ -112,7 +120,9 @@ def build_simple_bitcoin_query(recency_minutes: int = 30, max_events: int = 5) -
             page=1,
             count=min(max_events * 2, 10),  # Request only 2x what we need, max 10
             sortBy="date",  # Sort by date for most recent first
-            returnInfo=None  # Use default return info
+            returnInfo=RequestEventsInfo.ReturnInfo(
+                eventInfo=["title", "summary", "concepts", "uri", "lang", "date"]
+            )
         )
     )
     
@@ -161,7 +171,9 @@ def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -
             page=1,
             count=min(max_events * 3, 15),  # Request only ~3x what we need, max 15
             sortBy="date",  # Sort by date for most recent first
-            returnInfo=None  # Use default return info
+            returnInfo=RequestEventsInfo.ReturnInfo(
+                eventInfo=["title", "summary", "concepts", "uri", "lang", "date"]
+            )
         )
     )
     
@@ -229,7 +241,7 @@ def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool
 
 def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
                                              recency_minutes: int = 90,
-                                             max_events: int = 5) -> List[str]:
+                                             max_events: int = 5) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events with progressive fallback to smaller time windows and simpler queries.
     
@@ -239,7 +251,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
         max_events (int): Maximum number of events to fetch.
     
     Returns:
-        List[str]: List of event URIs.
+        Tuple: (List of event URIs, Dict of cached event details)
     """
     # Progressive fallback windows (in minutes) - more granular fallbacks
     fallback_windows = [
@@ -285,13 +297,13 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
                 print(f"All fallback attempts failed. API appears to be having performance issues.", file=sys.stderr)
                 raise APITimeoutError("All progressive fallback attempts timed out")
     
-    return []  # Should never reach here
+    return [], {}  # Return empty results if all attempts failed
 
 
 def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
                                recency_minutes: int = 90,
                                max_events: int = 5,
-                               use_simple_query: bool = False) -> List[str]:
+                               use_simple_query: bool = False) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events from EventRegistry API.
     
@@ -302,7 +314,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         use_simple_query (bool): Use simplified query for better reliability.
     
     Returns:
-        List[str]: List of event URIs.
+        Tuple: (List of event URIs, Dict of cached event details)
     """
     if not api_key:
         api_key = os.getenv('EVENTREGISTRY_API_KEY')
@@ -358,7 +370,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         
         if not result or 'events' not in result:
             print("No events found in API response", file=sys.stderr)
-            return []
+            return [], {}
         
         events = result['events']['results']
         print(f"Found {len(events)} raw events from EventRegistry", file=sys.stderr)
@@ -387,16 +399,25 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
             
         print(f"Filtered to {len(filtered_events)} Bitcoin{'mining' if not use_simple_query else ''} events", file=sys.stderr)
         
-        # Extract event URIs and limit to max_events
+        # Extract event URIs and store event details for fallback
         event_uris = []
+        event_details_cache = {}
         for event in filtered_events[:max_events]:
             uri = event.get('uri')
             if uri:
                 event_uris.append(uri)
+                # Cache event details for fallback use
+                event_details_cache[uri] = {
+                    'title': event.get('title', {}),
+                    'summary': event.get('summary', {}), 
+                    'concepts': event.get('concepts', []),
+                    'date': event.get('date', ''),
+                    'uri': uri
+                }
                 title = event.get('title', {}).get('eng', 'No title')
                 print(f"  - {uri}: {title[:100]}...", file=sys.stderr)
         
-        return event_uris
+        return event_uris, event_details_cache, event_details_cache
         
     except TimeoutError:
         print(f"Error: API query timed out (>{timeout_seconds} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
@@ -404,7 +425,7 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
         # For non-timeout errors, return empty list instead of crashing
-        return []
+        return [], {}
     finally:
         # Ensure alarm is always canceled
         try:
@@ -478,20 +499,23 @@ def main():
         # Fetch new events
         print(f"Fetching up to {args.max_articles} events from last {args.recency_minutes} minutes...", file=sys.stderr)
         
+        event_details_cache = {}  # Initialize cache
+        
         if args.dry_run:
             print("🧪 DRY RUN MODE: No API calls will be made", file=sys.stderr)
             # Simulate some events for dry run
             new_event_uris = [f"dry-run-event-{i}" for i in range(1, min(args.max_articles + 1, 4))]
+            event_details_cache = {}
             print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
         else:
             try:
-                new_event_uris = fetch_bitcoin_mining_events_with_fallback(
+                new_event_uris, event_details_cache = fetch_bitcoin_mining_events_with_fallback(
                     recency_minutes=args.recency_minutes,
                     max_events=args.max_articles
                 )
             except APITimeoutError:
                 print("All progressive fallback attempts failed - falling back to existing queue if available", file=sys.stderr)
-                new_event_uris = []
+                new_event_uris, event_details_cache = [], {}
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)
@@ -553,7 +577,11 @@ def main():
         
         # Combine with existing queue and save
         updated_queue = existing_queue + unique_new_events
-        save_events_queue(updated_queue, args.output)
+        
+        # Filter the cache to only include events we're actually saving
+        filtered_cache = {uri: event_details_cache.get(uri, {}) for uri in unique_new_events if uri in event_details_cache}
+        
+        save_events_queue(updated_queue, args.output, filtered_cache)
         
         print(f"✅ Added {len(unique_new_events)} new events to queue", file=sys.stderr)
         print(f"📊 Total events in queue: {len(updated_queue)}", file=sys.stderr)
