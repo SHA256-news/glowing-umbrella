@@ -112,21 +112,22 @@ def timeout_handler(signum, frame):
 
 def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
     """Fetch event details with timeout."""
-    # Set up timeout handler
-    signal.signal(signal.SIGALRM, timeout_handler)
+    # Set up timeout handler and store original
+    original_handler = signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(timeout_seconds)
     
     try:
         q = QueryEvent(event_uri, requestedResult=RequestEventInfo())
         result = er.execQuery(q)
-        signal.alarm(0)  # Cancel the alarm
         return result
     except TimeoutError:
-        signal.alarm(0)  # Cancel the alarm
         raise TimeoutError(f"EventRegistry API call timed out after {timeout_seconds} seconds")
     except Exception as e:
-        signal.alarm(0)  # Cancel the alarm
         raise e
+    finally:
+        # Always cancel the alarm and restore original handler
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_handler)
     """Creates a detailed prompt for the Gemini model based on event details."""
     
     event_title = event_details.get('title', 'N/A')
