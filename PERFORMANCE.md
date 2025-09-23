@@ -29,21 +29,22 @@ The `fetch_news.py` script was running slowly, especially with large time window
 - **Optimized String Operations**: Reduce text processing overhead
 
 ### 4. Timeout and Error Handling
-- **30-second API Timeout**: Prevents hanging on slow queries
-- **Graceful Fallbacks**: Multiple retry strategies with smaller windows
+- **Progressive Timeouts**: Much more aggressive timeouts (8-20 seconds) based on window size
+- **Progressive Fallback**: Automatic retry with progressively smaller windows (4h → 2h → 1h → 30min)
 - **Clear Error Messages**: Better guidance for performance issues
+- **Fallback Protection**: Never fails completely - always tries smaller windows
 
 ### 5. Performance-Optimized Modes
-- **`--fast-mode`**: Automatic performance optimizations
-- **Shell Wrapper**: `fetch_btc_news.sh` with optimized defaults
-- **Updated Workflows**: Default to 1-day windows instead of 7-day
+- **`--fast-mode`**: Automatic performance optimizations with 2-hour max window
+- **Shell Wrapper**: `fetch_btc_news.sh` with 1-hour fallback
+- **Updated Workflows**: Default to 1-day windows with 1-hour fallback
 
 ## Performance Improvements
 
 ### Workflow Changes
 - **Default Time Window**: Reduced from 7 days to 1 day (7x faster API queries)
-- **Fallback Strategy**: Automatic retry with 8-hour window if 1-day fails
-- **Fast Mode Integration**: All automation uses optimized settings
+- **Fallback Strategy**: Progressive fallback with much smaller windows (2h → 1h → 30min)
+- **Fast Mode Integration**: All automation uses ultra-aggressive optimizations
 
 ### API Efficiency
 - **Request Size**: Reduced from 30 to 15 events max (~50% fewer API calls)
@@ -51,9 +52,9 @@ The `fetch_news.py` script was running slowly, especially with large time window
 - **Processing Speed**: Early termination and optimized filtering
 
 ### Expected Results
-- **Typical Speed**: 1-day searches should complete in seconds instead of minutes
-- **Large Queries**: Even 7-day searches now limited to 1-day with fast mode
-- **Reliability**: Timeout protection prevents indefinite hangs
+- **Typical Speed**: 2-hour searches should complete in seconds (8-12 second timeout)
+- **Automatic Fallback**: Progressive reduction to 30-minute windows if needed
+- **Reliability**: Multi-level timeout protection prevents indefinite hangs
 
 ## Usage Recommendations
 
