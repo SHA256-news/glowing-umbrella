@@ -28,7 +28,7 @@ python3 "$SCRIPT_DIR/fetch_news.py" \
         # Fallback to even smaller window if the optimized one fails
         python3 "$SCRIPT_DIR/fetch_news.py" \
             --max-articles "$MAX_ARTICLES" \
-            --recency-minutes 120 \
+            --recency-minutes 60 \
             --output-format "$OUTPUT_FORMAT" \
             --fast-mode
     }

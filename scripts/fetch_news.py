@@ -193,6 +193,48 @@ def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool
     return filtered_events
 
 
+def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
+                                             recency_minutes: int = 90,
+                                             max_events: int = 5) -> List[str]:
+    """
+    Fetch Bitcoin mining events with progressive fallback to smaller time windows.
+    
+    Args:
+        api_key (Optional[str]): EventRegistry API key.
+        recency_minutes (int): Initial time window to try.
+        max_events (int): Maximum number of events to fetch.
+    
+    Returns:
+        List[str]: List of event URIs.
+    """
+    # Progressive fallback windows (in minutes)
+    fallback_windows = [
+        recency_minutes,  # Original requested window
+        min(recency_minutes, 240),  # 4 hours max
+        min(recency_minutes, 120),  # 2 hours max
+        min(recency_minutes, 60),   # 1 hour max
+        30,  # Emergency fallback: 30 minutes
+    ]
+    
+    # Remove duplicates while preserving order
+    fallback_windows = list(dict.fromkeys(fallback_windows))
+    
+    for i, window_minutes in enumerate(fallback_windows):
+        try:
+            print(f"Attempting API call with {window_minutes} minute window...", file=sys.stderr)
+            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events)
+        except APITimeoutError:
+            if i < len(fallback_windows) - 1:  # Not the last attempt
+                next_window = fallback_windows[i + 1]
+                print(f"API timeout with {window_minutes} minutes. Trying {next_window} minutes...", file=sys.stderr)
+                continue
+            else:  # Last attempt failed
+                print(f"All fallback attempts failed. API appears to be having performance issues.", file=sys.stderr)
+                raise APITimeoutError("All progressive fallback attempts timed out")
+    
+    return []  # Should never reach here
+
+
 def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
                                recency_minutes: int = 90,
                                max_events: int = 5) -> List[str]:
@@ -217,13 +259,17 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
     
     # Set a dynamic timeout based on time window size
-    # Smaller windows should complete faster, larger windows need more time
-    if recency_minutes <= 120:  # 2 hours or less
-        timeout_seconds = 15
+    # Much more aggressive timeouts due to API performance issues
+    if recency_minutes <= 60:   # 1 hour or less
+        timeout_seconds = 8
+    elif recency_minutes <= 120:  # 2 hours or less
+        timeout_seconds = 10
+    elif recency_minutes <= 240:  # 4 hours or less
+        timeout_seconds = 12
     elif recency_minutes <= 480:  # 8 hours or less  
-        timeout_seconds = 25
+        timeout_seconds = 15
     else:  # Larger windows
-        timeout_seconds = 30
+        timeout_seconds = 20
     
     try:
         er = EventRegistry(apiKey=api_key)
@@ -324,12 +370,12 @@ def main():
             args.recency_minutes = 1440  # Limit to 1 day
             print(f"Fast mode: Reduced time window from {original_minutes//1440} days to 1 day", file=sys.stderr)
         
-        # Additional optimization: if still experiencing timeouts, start smaller
-        # Based on recent API performance issues, limit to 8 hours for ultra-fast mode
-        if args.recency_minutes > 480:  # More than 8 hours
+        # Additional optimization: if still experiencing timeouts, start even smaller
+        # Based on recent API performance issues, limit to 2 hours for ultra-fast mode
+        if args.recency_minutes > 120:  # More than 2 hours
             original_minutes = args.recency_minutes
-            args.recency_minutes = 480  # Limit to 8 hours for better reliability
-            print(f"Fast mode: Further reduced time window from {original_minutes} minutes ({original_minutes//60} hours) to 8 hours for better API reliability", file=sys.stderr)
+            args.recency_minutes = 120  # Limit to 2 hours for better reliability
+            print(f"Fast mode: Further reduced time window from {original_minutes} minutes ({original_minutes//60} hours) to 2 hours for better API reliability", file=sys.stderr)
         
         # Limit max articles for faster processing
         if args.max_articles > 10:
@@ -359,12 +405,12 @@ def main():
             print(f"Simulated {len(new_event_uris)} events for dry run", file=sys.stderr)
         else:
             try:
-                new_event_uris = fetch_bitcoin_mining_events(
+                new_event_uris = fetch_bitcoin_mining_events_with_fallback(
                     recency_minutes=args.recency_minutes,
                     max_events=args.max_articles
                 )
             except APITimeoutError:
-                print("API timeout occurred - falling back to existing queue if available", file=sys.stderr)
+                print("All progressive fallback attempts failed - falling back to existing queue if available", file=sys.stderr)
                 new_event_uris = []
         
         if not new_event_uris:

@@ -61,16 +61,16 @@ jobs:
         else
           echo "Searching last $days_back day(s) for up to $max_articles articles"
           
-          # Use optimized approach with fast mode and fallback
+          # Use optimized approach with fast mode and aggressive fallback
           python scripts/fetch_news.py \
             --max-articles "$max_articles" \
             --days-back "$days_back" \
             --output-format uris \
             --fast-mode > news_uris.txt || {
-              echo "Fast mode failed, trying with smaller 2-hour window..."
+              echo "Fast mode failed, trying with smaller 1-hour window..."
               python scripts/fetch_news.py \
                 --max-articles "$max_articles" \
-                --recency-minutes 120 \
+                --recency-minutes 60 \
                 --output-format uris \
                 --fast-mode > news_uris.txt
             }
