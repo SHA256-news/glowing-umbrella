@@ -127,11 +127,7 @@ def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
         
         # Method 1: Basic query with comprehensive return info
         try:
-            q = QueryEvent(event_uri, requestedResult=RequestEventInfo(
-                returnInfo=RequestEventInfo.ReturnInfo(
-                    eventInfo=["title", "summary", "concepts", "uri", "lang", "articleCounts"]
-                )
-            ))
+            q = QueryEvent(event_uri, requestedResult=RequestEventInfo())
             result = er.execQuery(q)
             
             if result and 'event' in result and result['event']:
