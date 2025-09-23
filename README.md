@@ -91,6 +91,29 @@ The workflows run automatically:
 
 Manual triggers are also available via GitHub Actions interface.
 
+#### Workflow Options
+
+When manually triggering the `publish_article.yml` workflow, you can configure:
+- **max_articles**: Maximum number of articles to fetch (default: 5)
+- **days_back**: Number of days back to search (default: 1)
+- **test_mode**: Run in test mode with sample data instead of API calls (default: false)
+
+#### Test Mode vs. Real API Usage
+
+**Real API Mode (Default):**
+- Uses EventRegistry API to fetch actual Bitcoin mining news events
+- Uses Gemini API to generate articles from real event data
+- Requires valid API keys configured as repository secrets
+- If no events are found, the workflow exits with an error (no fallback to test mode)
+
+**Test Mode:**
+- Must be explicitly enabled via workflow input or `--test-mode` flag
+- Uses sample data without making API calls
+- Generates articles with placeholder content for testing
+- Useful for testing workflow functionality without consuming API quotas
+
+**Recent Fix:** The automatic fallback to test mode has been removed. The system now always attempts to use real APIs when keys are available, and only uses test mode when explicitly requested.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
