@@ -104,7 +104,8 @@ When manually triggering the `publish_article.yml` workflow, you can configure:
 - Uses EventRegistry API to fetch actual Bitcoin mining news events
 - Uses Gemini API to generate articles from real event data
 - Requires valid API keys configured as repository secrets
-- If no events are found, the workflow exits with an error (no fallback to test mode)
+- If no events are found or API calls fail, the workflow exits with an error
+- **No automatic fallback to test mode** - ensures transparency when real data is unavailable
 
 **Test Mode:**
 - Must be explicitly enabled via workflow input or `--test-mode` flag
@@ -112,7 +113,7 @@ When manually triggering the `publish_article.yml` workflow, you can configure:
 - Generates articles with placeholder content for testing
 - Useful for testing workflow functionality without consuming API quotas
 
-**Recent Fix:** The automatic fallback to test mode has been removed. The system now always attempts to use real APIs when keys are available, and only uses test mode when explicitly requested.
+**Important Change:** The automatic fallback to test mode has been removed. The system now always attempts to use real APIs when keys are available, and only uses test mode when explicitly requested. This ensures that API failures are visible rather than being masked by placeholder content.
 
 ## License
 

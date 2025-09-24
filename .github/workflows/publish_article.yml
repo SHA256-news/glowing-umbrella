@@ -48,7 +48,6 @@ jobs:
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
           MAX_ARTICLES: "5"
           MINUTES_BACK: "6"
-          ENABLE_TEST_FALLBACK: "true"
         run: |
           set -euo pipefail
 
@@ -75,10 +74,7 @@ jobs:
             done
           fi
 
-          if [ ! -s news_uris.txt ] && [ "${ENABLE_TEST_FALLBACK:-true}" = "true" ]; then
-            echo "No URIs found after retries. Using test mode fallback."
-            python scripts/fetch_news.py --test-mode --output-format uris > news_uris.txt || true
-          fi
+          # Removed automatic test mode fallback - fail transparently when API calls fail
 
           if [ ! -s news_uris.txt ]; then
             echo "No news articles found and fallback disabled. Exiting."

@@ -148,6 +148,29 @@ def timeout_handler(signum, frame):
     """Handle timeout for API calls."""
     raise TimeoutError("API call timed out")
 
+def is_test_mode_uri(uri):
+    """Check if a URI is a test mode or placeholder URI."""
+    if not uri or not isinstance(uri, str):
+        return False
+    
+    uri_lower = uri.lower()
+    test_patterns = [
+        'test-mode-event',
+        'dry-run-event',
+        'test-mode-sample',
+        'placeholder'
+    ]
+    
+    return any(pattern in uri_lower for pattern in test_patterns)
+
+def detect_test_mode_uris(event_uris):
+    """Detect if any URIs in the list are test mode URIs."""
+    if not event_uris:
+        return False
+    
+    test_uris = [uri for uri in event_uris if is_test_mode_uri(uri)]
+    return len(test_uris) > 0, test_uris
+
 def fetch_event_details_with_timeout(er, event_uri, timeout_seconds=30):
     """Fetch event details with timeout and better error handling."""
     # Set up timeout handler and store original
@@ -350,6 +373,16 @@ def main():
             return
 
     print(f"Found {len(event_uris)} events to process.")
+    
+    # Check for test mode URIs when not explicitly in test mode
+    if not args.test_mode:
+        has_test_uris, test_uris_found = detect_test_mode_uris(event_uris)
+        if has_test_uris:
+            print(f"ERROR: Test mode or placeholder URIs detected in production mode!")
+            print(f"Found test URIs: {test_uris_found}")
+            print("This suggests the news fetching API failed and fell back to test data.")
+            print("Exiting to prevent generation of misleading articles from test data.")
+            sys.exit(1)
     
     remaining_events = list(event_uris)  # Copy to modify while iterating
     processed_count = 0
