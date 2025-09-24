@@ -48,7 +48,6 @@ jobs:
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
           MAX_ARTICLES: "5"
           MINUTES_BACK: "6"
-          ENABLE_TEST_FALLBACK: "true"
         run: |
           set -euo pipefail
 
@@ -93,7 +92,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
-          ENABLE_PLACEHOLDER: "true"
+          ENABLE_PLACEHOLDER: "false"
         run: |
           if [ -z "${{ steps.fetch_news.outputs.first_uri }}" ]; then
             echo "No news URI available for article generation."
