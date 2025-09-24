@@ -111,14 +111,24 @@ def write_placeholder(path="generated_article.json"):
         "title": "No Recent Bitcoin Mining News", 
         "headline": "No Recent Bitcoin Mining News",
         "subtitle": "The news API returned no recent Bitcoin mining events during this run.",
-        "content": "We'll publish again automatically once fresh mining news becomes available.",
+        "content": """Bitcoin mining news can vary significantly in frequency, with some periods experiencing high activity around difficulty adjustments, hash rate changes, or major industry developments, while others may see quieter periods.
+
+During these quieter intervals, it's worth noting that Bitcoin's mining network continues to operate steadily. Miners worldwide maintain the network's security through continuous block production, even when major headlines aren't being generated.
+
+We'll continue monitoring for fresh Bitcoin mining developments and will publish updates automatically once newsworthy events emerge. This automated approach ensures our readers receive timely coverage of significant mining industry developments.""",
         "created_at": int(time.time()),
         "generated_at": datetime.now().isoformat(),
-        "body": "We'll publish again automatically once fresh mining news becomes available.",
+        "body": """Bitcoin mining news can vary significantly in frequency, with some periods experiencing high activity around difficulty adjustments, hash rate changes, or major industry developments, while others may see quieter periods.
+
+During these quieter intervals, it's worth noting that Bitcoin's mining network continues to operate steadily. Miners worldwide maintain the network's security through continuous block production, even when major headlines aren't being generated.
+
+We'll continue monitoring for fresh Bitcoin mining developments and will publish updates automatically once newsworthy events emerge. This automated approach ensures our readers receive timely coverage of significant mining industry developments.""",
         "key_points": [
-            "No recent Bitcoin mining news found in current search window",
-            "Automated system will retry on next scheduled run",
-            "This is normal during periods of low mining-specific news activity"
+            "Bitcoin mining news frequency naturally fluctuates based on industry activity cycles",
+            "Mining network continues operating normally during quiet news periods",
+            "Automated monitoring ensures no significant developments are missed",
+            "Next update will be generated when fresh mining-related events occur",
+            "This pattern is typical in the cryptocurrency mining industry"
         ],
         "tags": ["bitcoin", "mining", "automated", "placeholder"],
         "model_used": "placeholder-generator",
