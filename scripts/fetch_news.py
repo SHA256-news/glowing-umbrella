@@ -11,7 +11,7 @@ import os
 import sys
 import json
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Set, Optional, Tuple
 from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems, QueryArticlesIter, RequestArticlesInfo
 import requests
@@ -127,7 +127,7 @@ def fetch_articles_simple(api_key: str, recency_minutes: int = 30, max_articles:
     er = EventRegistry(apiKey=api_key)
     
     # Calculate date range using datetime objects (not date objects!)
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(minutes=recency_minutes)
     
     print(f"Using simplified article query for last {recency_minutes} minutes...", file=sys.stderr)
@@ -184,7 +184,7 @@ def build_simple_bitcoin_query(recency_minutes: int = 30, max_events: int = 5) -
         QueryEvents: Simplified query for Bitcoin events.
     """
     # Calculate date range
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(minutes=recency_minutes)
     
     # Use very simple query strategy for better API reliability
@@ -217,7 +217,7 @@ def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -
         QueryEvents: Configured query for Bitcoin mining events.
     """
     # Calculate date range
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(minutes=recency_minutes)
     
     # Limit very large time windows for performance
@@ -337,10 +337,10 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
     # Progressive fallback windows (in minutes)
     fallback_windows = [
         recency_minutes,  # Original requested window
-        min(recency_minutes, 60),   # 1 hour max
-        30,  # 30 minutes
-        15,  # 15 minutes
-        5,   # 5 minutes - ultra-recent fallback
+        180,  # 3 hours
+        120,  # 2 hours  
+        60,   # 1 hour
+        30,   # 30 minutes
     ]
     
     # Remove duplicates while preserving order
