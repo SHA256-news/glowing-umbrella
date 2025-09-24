@@ -166,7 +166,7 @@ def is_test_mode_uri(uri):
 def detect_test_mode_uris(event_uris):
     """Detect if any URIs in the list are test mode URIs."""
     if not event_uris:
-        return False
+        return False, []
     
     test_uris = [uri for uri in event_uris if is_test_mode_uri(uri)]
     return len(test_uris) > 0, test_uris
