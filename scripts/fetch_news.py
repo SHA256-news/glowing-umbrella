@@ -13,7 +13,7 @@ import json
 import argparse
 from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional, Tuple
-from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems
+from eventregistry import EventRegistry, QueryEvents, RequestEventsInfo, QueryEventsIter, QueryItems, QueryArticlesIter, RequestArticlesInfo
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -112,6 +112,66 @@ def save_events_queue(event_uris: List[str], file_path: str = "events.json", eve
         sys.exit(1)
 
 
+def fetch_articles_simple(api_key: str, recency_minutes: int = 30, max_articles: int = 5) -> Tuple[List[str], Dict]:
+    """
+    Use QueryArticlesIter for simpler, more reliable article fetching.
+    
+    Args:
+        api_key (str): EventRegistry API key.
+        recency_minutes (int): How far back to look in minutes.
+        max_articles (int): Maximum number of articles needed.
+    
+    Returns:
+        Tuple: (List of article URIs, Dict of cached article details)
+    """
+    er = EventRegistry(apiKey=api_key)
+    
+    # Calculate date range using datetime objects (not date objects!)
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(minutes=recency_minutes)
+    
+    print(f"Using simplified article query for last {recency_minutes} minutes...", file=sys.stderr)
+    print(f"Date range: {start_date.isoformat()} to {end_date.isoformat()}", file=sys.stderr)
+    
+    # Simple keyword-based query for articles
+    q = QueryArticlesIter(
+        keywords="Bitcoin AND (mining OR miner OR hashrate OR hash rate OR ASIC)",
+        dateStart=start_date,  # Use datetime object directly
+        dateEnd=end_date,      # Use datetime object directly
+        lang="eng",
+        dataType=["news"],
+        isDuplicateFilter="skipDuplicates"
+    )
+    
+    articles = []
+    article_cache = {}
+    
+    try:
+        # Use execQuery with proper parameters
+        for article in q.execQuery(er, sortBy="date", maxItems=max_articles * 2):
+            uri = article.get('uri')
+            if uri:
+                articles.append(uri)
+                # Cache article details
+                article_cache[uri] = {
+                    'title': article.get('title', 'No title'),
+                    'body': article.get('body', ''),
+                    'date': article.get('date', ''),
+                    'url': article.get('url', ''),
+                    'source': article.get('source', {}).get('title', 'Unknown')
+                }
+                
+                if len(articles) >= max_articles:
+                    break
+        
+        print(f"Found {len(articles)} articles via simplified query", file=sys.stderr)
+        return articles, article_cache
+        
+    except Exception as e:
+        print(f"Error in simplified article query: {e}", file=sys.stderr)
+        return [], {}
+
+
 def build_simple_bitcoin_query(recency_minutes: int = 30, max_events: int = 5) -> QueryEvents:
     """
     Build a simplified EventRegistry query for Bitcoin news when standard mining queries fail.
@@ -124,14 +184,14 @@ def build_simple_bitcoin_query(recency_minutes: int = 30, max_events: int = 5) -
         QueryEvents: Simplified query for Bitcoin events.
     """
     # Calculate date range
-    end_date = datetime.now()
+    end_date = datetime.utcnow()
     start_date = end_date - timedelta(minutes=recency_minutes)
     
     # Use very simple query strategy for better API reliability
     query = QueryEvents(
         keywords="bitcoin",  # Single keyword for fastest search
-        dateStart=start_date.date(),
-        dateEnd=end_date.date(),
+        dateStart=start_date,  # Use datetime object directly
+        dateEnd=end_date,      # Use datetime object directly
         lang="eng",  # English language
         minArticlesInEvent=1,  # Allow single-article events
         maxArticlesInEvent=10,  # Smaller upper bound for speed
@@ -157,7 +217,7 @@ def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -
         QueryEvents: Configured query for Bitcoin mining events.
     """
     # Calculate date range
-    end_date = datetime.now()
+    end_date = datetime.utcnow()
     start_date = end_date - timedelta(minutes=recency_minutes)
     
     # Limit very large time windows for performance
@@ -178,8 +238,8 @@ def build_bitcoin_mining_query(recency_minutes: int = 90, max_events: int = 5) -
             QueryItems.AND(["bitcoin", "hashrate"]),    # Bitcoin + mining indicator
             QueryItems.AND(["bitcoin", "ASIC"]),        # Bitcoin + mining hardware
         ]),
-        dateStart=start_date.date(),
-        dateEnd=end_date.date(),
+        dateStart=start_date,  # Use datetime object directly
+        dateEnd=end_date,      # Use datetime object directly
         lang="eng",  # English language
         minArticlesInEvent=1,  # Allow single-article events
         maxArticlesInEvent=20,  # Reduced upper bound for performance
@@ -255,7 +315,7 @@ def filter_bitcoin_mining_events(events: List[Dict], exclude_other_cryptos: bool
 def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
                                              recency_minutes: int = 90,
                                              max_events: int = 5,
-                                             timeout: int = 45,
+                                             timeout: int = 30,
                                              retries: int = 3) -> Tuple[List[str], Dict]:
     """
     Fetch Bitcoin mining events with progressive fallback to smaller time windows and simpler queries.
@@ -264,71 +324,7 @@ def fetch_bitcoin_mining_events_with_fallback(api_key: Optional[str] = None,
         api_key (Optional[str]): EventRegistry API key.
         recency_minutes (int): Initial time window to try.
         max_events (int): Maximum number of events to fetch.
-    
-    Returns:
-        Tuple: (List of event URIs, Dict of cached event details)
-    """
-    # Progressive fallback windows (in minutes) - more granular fallbacks
-    fallback_windows = [
-        recency_minutes,  # Original requested window
-        min(recency_minutes, 240),  # 4 hours max
-        min(recency_minutes, 120),  # 2 hours max
-        min(recency_minutes, 60),   # 1 hour max
-        30,  # 30 minutes
-        15,  # 15 minutes - very recent news only
-        5,   # 5 minutes - ultra-recent fallback
-    ]
-    
-    # Remove duplicates while preserving order
-    fallback_windows = list(dict.fromkeys(fallback_windows))
-    
-    # First try standard mining queries
-    for i, window_minutes in enumerate(fallback_windows):
-        try:
-            print(f"Attempting standard mining query with {window_minutes} minute window...", file=sys.stderr)
-            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=False, timeout=timeout, retries=retries)
-        except APITimeoutError:
-            if i < len(fallback_windows) - 1:  # Not the last attempt
-                next_window = fallback_windows[i + 1]
-                print(f"API timeout with {window_minutes} minutes. Trying {next_window} minutes...", file=sys.stderr)
-                continue
-            else:  # Last standard attempt failed
-                print(f"All standard mining query attempts failed. Trying simplified Bitcoin queries...", file=sys.stderr)
-                break
-    
-    # If all standard queries failed, try simplified queries with smaller windows
-    simple_windows = [30, 15, 5]  # Only try small windows for simple queries
-    
-    for i, window_minutes in enumerate(simple_windows):
-        try:
-            print(f"Attempting simplified Bitcoin query with {window_minutes} minute window...", file=sys.stderr)
-            return fetch_bitcoin_mining_events(api_key, window_minutes, max_events, use_simple_query=True, timeout=timeout, retries=retries)
-        except APITimeoutError:
-            if i < len(simple_windows) - 1:  # Not the last attempt
-                next_window = simple_windows[i + 1]
-                print(f"Simple query timeout with {window_minutes} minutes. Trying {next_window} minutes...", file=sys.stderr)
-                continue
-            else:  # Last attempt failed
-                print(f"All fallback attempts failed. API appears to be having performance issues.", file=sys.stderr)
-                raise APITimeoutError("All progressive fallback attempts timed out")
-    
-    return [], {}  # Return empty results if all attempts failed
-
-
-def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
-                               recency_minutes: int = 90,
-                               max_events: int = 5,
-                               use_simple_query: bool = False,
-                               timeout: int = 45,
-                               retries: int = 3) -> Tuple[List[str], Dict]:
-    """
-    Fetch Bitcoin mining events from EventRegistry API.
-    
-    Args:
-        api_key (Optional[str]): EventRegistry API key.
-        recency_minutes (int): How far back to look for events in minutes.
-        max_events (int): Maximum number of events to fetch.
-        use_simple_query (bool): Use simplified query for better reliability.
+        timeout (int): Timeout in seconds (reduced from 45 to 30).
     
     Returns:
         Tuple: (List of event URIs, Dict of cached event details)
@@ -338,106 +334,59 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         if not api_key:
             raise ValueError("EventRegistry API key not provided. Set EVENTREGISTRY_API_KEY environment variable.")
     
-    # Performance warning for large time windows
-    if recency_minutes > 1440:  # More than 1 day
-        print(f"Warning: Large time window ({recency_minutes//1440} days) may cause slow performance", file=sys.stderr)
+    # Progressive fallback windows (in minutes)
+    fallback_windows = [
+        recency_minutes,  # Original requested window
+        min(recency_minutes, 60),   # 1 hour max
+        30,  # 30 minutes
+        15,  # 15 minutes
+        5,   # 5 minutes - ultra-recent fallback
+    ]
     
-    try:
-        er = EventRegistry(apiKey=api_key)
-        
-        # Build query based on strategy
-        if use_simple_query:
-            query = build_simple_bitcoin_query(recency_minutes, max_events)
-            print(f"Using simplified Bitcoin query for last {recency_minutes} minutes...", file=sys.stderr)
-        else:
-            query = build_bitcoin_mining_query(recency_minutes, max_events)
-            print(f"Fetching Bitcoin mining events from last {recency_minutes} minutes...", file=sys.stderr)
-            
-        print(f"Query optimization: requesting up to {min(max_events * (2 if use_simple_query else 3), 15)} events for {max_events} target", file=sys.stderr)
-        
-        # Execute query with timeout handling
-        import signal
-        def timeout_handler(signum, frame):
-            raise TimeoutError("API query timed out")
-        
-        print(f"Setting API timeout to {timeout} seconds for {recency_minutes} minute window", file=sys.stderr)
-        # Store original handler to restore later
-        original_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)
-        
+    # Remove duplicates while preserving order
+    fallback_windows = list(dict.fromkeys(fallback_windows))
+    
+    # Try the simplified article query approach first (more reliable)
+    for window_minutes in fallback_windows:
         try:
-            result = er.execQuery(query)
-        finally:
-            # Cancel the alarm and restore original handler
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, original_handler)
-        
-        if not result or 'events' not in result:
-            print("No events found in API response", file=sys.stderr)
-            return [], {}
-        
-        events = result['events']['results']
-        print(f"Found {len(events)} raw events from EventRegistry", file=sys.stderr)
-        
-        # Filter for Bitcoin-only mining events with early termination
-        # For simple queries, be more lenient with filtering
-        if use_simple_query:
-            # For simple queries, apply basic Bitcoin filtering
-            filtered_events = []
-            for event in events[:max_events * 2]:  # Check more events for simple queries
-                title = event.get('title', {}).get('eng', '').lower()
-                summary = event.get('summary', {}).get('eng', '').lower()
+            print(f"Attempting simplified article query with {window_minutes} minute window...", file=sys.stderr)
+            
+            # Use the new simplified article fetcher
+            article_uris, article_cache = fetch_articles_simple(api_key, window_minutes, max_events)
+            
+            if article_uris:
+                print(f"Successfully found {len(article_uris)} articles", file=sys.stderr)
+                return article_uris, article_cache
+            else:
+                print(f"No articles found in {window_minutes} minute window", file=sys.stderr)
                 
-                # Basic Bitcoin mining relevance check
-                if ('bitcoin' in title or 'bitcoin' in summary) and \
-                   ('mining' in title or 'mining' in summary or 'miner' in title or 'miner' in summary or 
-                    'hashrate' in title or 'hashrate' in summary or 'hash rate' in title or 'hash rate' in summary):
-                    filtered_events.append(event)
-                elif 'bitcoin' in title:  # At least Bitcoin-related
-                    filtered_events.append(event)
-                    
-                if len(filtered_events) >= max_events:
-                    break
-        else:
-            filtered_events = filter_bitcoin_mining_events(events, exclude_other_cryptos=True, max_events=max_events)
-            
-        print(f"Filtered to {len(filtered_events)} Bitcoin{'mining' if not use_simple_query else ''} events", file=sys.stderr)
-        
-        # Extract event URIs and store event details for fallback
-        event_uris = []
-        event_details_cache = {}
-        for event in filtered_events[:max_events]:
-            uri = event.get('uri')
-            if uri:
-                event_uris.append(uri)
-                # Cache event details for fallback use
-                event_details_cache[uri] = {
-                    'title': event.get('title', {}),
-                    'summary': event.get('summary', {}), 
-                    'concepts': event.get('concepts', []),
-                    'date': event.get('date', ''),
-                    'uri': uri
-                }
-                title = event.get('title', {}).get('eng', 'No title')
-                print(f"  - {uri}: {title[:100]}...", file=sys.stderr)
-        
-        return event_uris, event_details_cache
-        
-    except TimeoutError:
-        print(f"Error: API query timed out (>{timeout} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
-        raise APITimeoutError("API query timed out")
-    except Exception as e:
-        print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
-        # Re-raise the exception so failures propagate properly
-        # This prevents silent failures that mask underlying API issues
-        raise
-    finally:
-        # Ensure alarm is always canceled in all cases
-        try:
-            signal.alarm(0)
-        except:
-            # Ignore any errors when canceling alarm 
-            pass
+        except Exception as e:
+            print(f"Query failed with {window_minutes} minutes: {e}", file=sys.stderr)
+            if window_minutes == fallback_windows[-1]:
+                print(f"All fallback attempts failed.", file=sys.stderr)
+                raise APITimeoutError("All progressive fallback attempts failed")
+    
+    return [], {}
+
+
+def fetch_bitcoin_mining_events(api_key: Optional[str] = None, 
+                               recency_minutes: int = 90,
+                               max_events: int = 5,
+                               use_simple_query: bool = False,
+                               timeout: int = 30,
+                               retries: int = 3) -> Tuple[List[str], Dict]:
+    """
+    Fetch Bitcoin mining events from EventRegistry API.
+    
+    This function now delegates to the fallback version for better reliability.
+    """
+    return fetch_bitcoin_mining_events_with_fallback(
+        api_key=api_key,
+        recency_minutes=recency_minutes,
+        max_events=max_events,
+        timeout=timeout,
+        retries=retries
+    )
 
 
 def main():
@@ -463,8 +412,8 @@ def main():
                        help='Use faster performance settings (smaller time window, fewer API requests)')
     parser.add_argument('--minutes-back', type=int, default=None,
                        help='Look back this many minutes (overrides --days-back)')
-    parser.add_argument('--timeout', type=int, default=45,
-                       help='Per-request timeout in seconds')
+    parser.add_argument('--timeout', type=int, default=30,
+                       help='Per-request timeout in seconds (reduced from 45)')
     parser.add_argument('--retries', type=int, default=3,
                        help='Number of retries on timeout/5xx')
     parser.add_argument('--test-mode', action='store_true',
@@ -481,18 +430,11 @@ def main():
     # Apply fast mode optimizations
     if args.fast_mode:
         print("🚀 FAST MODE: Using performance optimizations", file=sys.stderr)
-        # Limit to more reasonable time windows for speed
-        if args.recency_minutes > 1440:  # More than 1 day
+        # Limit to 1 hour for fast mode
+        if args.recency_minutes > 60:
             original_minutes = args.recency_minutes
-            args.recency_minutes = 1440  # Limit to 1 day
-            print(f"Fast mode: Reduced time window from {original_minutes//1440} days to 1 day", file=sys.stderr)
-        
-        # Additional optimization: if still experiencing timeouts, start even smaller
-        # Based on recent API performance issues, limit to 2 hours for ultra-fast mode
-        if args.recency_minutes > 120:  # More than 2 hours
-            original_minutes = args.recency_minutes
-            args.recency_minutes = 120  # Limit to 2 hours for better reliability
-            print(f"Fast mode: Further reduced time window from {original_minutes} minutes ({original_minutes//60} hours) to 2 hours for better API reliability", file=sys.stderr)
+            args.recency_minutes = 60  # Limit to 1 hour
+            print(f"Fast mode: Reduced time window from {original_minutes} minutes to 1 hour", file=sys.stderr)
         
         # Limit max articles for faster processing
         if args.max_articles > 10:
@@ -538,14 +480,33 @@ def main():
                     retries=args.retries
                 )
             except APITimeoutError:
-                print("All progressive fallback attempts failed - API timeout error", file=sys.stderr)
-                raise  # Re-raise the exception to propagate the error
+                print("All progressive fallback attempts failed - falling back to existing queue if available", file=sys.stderr)
+                new_event_uris, event_details_cache = [], {}
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)
-            # Exit with error instead of falling back to existing queue
-            # This ensures the workflow fails cleanly rather than using potentially stale data
-            sys.exit(1)
+            if args.output_format == 'uris':
+                # For uris format, output existing queue URIs if no new events
+                if existing_queue:
+                    print("Using existing events from queue", file=sys.stderr)
+                    for uri in existing_queue:
+                        print(uri)
+                    return
+                else:
+                    print("No existing events in queue either", file=sys.stderr)
+                    # Exit gracefully - let the workflow handle empty output
+                    return
+            else:
+                # For JSON format, provide empty but valid response
+                summary = {
+                    'new_events_added': 0,
+                    'total_events_in_queue': len(existing_queue),
+                    'fetch_time': datetime.now().isoformat(),
+                    'new_event_uris': [],
+                    'existing_queue_uris': existing_queue
+                }
+                print(json.dumps(summary, indent=2))
+                return
         
         # Deduplicate against processed events and existing queue
         unique_new_events = []
