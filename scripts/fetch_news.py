@@ -432,10 +432,11 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         # This prevents silent failures that mask underlying API issues
         raise
     finally:
-        # Ensure alarm is always canceled
+        # Ensure alarm is always canceled in all cases
         try:
             signal.alarm(0)
         except:
+            # Ignore any errors when canceling alarm 
             pass
 
 
@@ -537,33 +538,14 @@ def main():
                     retries=args.retries
                 )
             except APITimeoutError:
-                print("All progressive fallback attempts failed - falling back to existing queue if available", file=sys.stderr)
-                new_event_uris, event_details_cache = [], {}
+                print("All progressive fallback attempts failed - API timeout error", file=sys.stderr)
+                raise  # Re-raise the exception to propagate the error
         
         if not new_event_uris:
             print("No new events found from API", file=sys.stderr)
-            if args.output_format == 'uris':
-                # For uris format, output existing queue URIs if no new events
-                if existing_queue:
-                    print("Using existing events from queue", file=sys.stderr)
-                    for uri in existing_queue:
-                        print(uri)
-                    return
-                else:
-                    print("No existing events in queue either", file=sys.stderr)
-                    # Exit gracefully - let the workflow handle empty output
-                    return
-            else:
-                # For JSON format, provide empty but valid response
-                summary = {
-                    'new_events_added': 0,
-                    'total_events_in_queue': len(existing_queue),
-                    'fetch_time': datetime.now().isoformat(),
-                    'new_event_uris': [],
-                    'existing_queue_uris': existing_queue
-                }
-                print(json.dumps(summary, indent=2))
-                return
+            # Exit with error instead of falling back to existing queue
+            # This ensures the workflow fails cleanly rather than using potentially stale data
+            sys.exit(1)
         
         # Deduplicate against processed events and existing queue
         unique_new_events = []
