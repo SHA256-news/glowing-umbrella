@@ -112,7 +112,7 @@ When manually triggering the `publish_article.yml` workflow, you can configure:
 - Generates articles with placeholder content for testing
 - Useful for testing workflow functionality without consuming API quotas
 
-**Recent Fix:** The automatic fallback to test mode has been removed. The system now always attempts to use real APIs when keys are available, and only uses test mode when explicitly requested.
+**Behavior Change:** The automatic fallback to test mode has been removed to improve system transparency. The workflow now fails cleanly when the EventRegistry API cannot provide real news data, rather than masking the issue with placeholder articles. Test mode must be explicitly requested via the `--test-mode` flag or workflow input.
 
 ## License
 

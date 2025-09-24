@@ -357,6 +357,16 @@ def main():
 
     for event_uri in event_uris:
         print(f"\nProcessing event: {event_uri}")
+        
+        # Safety check: prevent processing test/placeholder URIs in production mode
+        if not args.test_mode and (event_uri.startswith("test-mode-") or 
+                                  event_uri.startswith("dry-run-") or 
+                                  event_uri == "placeholder"):
+            print(f"  ERROR: Detected test/placeholder URI '{event_uri}' but not in test mode!")
+            print(f"  This indicates the workflow incorrectly fell back to test data.")
+            print(f"  Use --test-mode flag explicitly if you want to process test data.")
+            raise ValueError(f"Production mode cannot process test URI: {event_uri}")
+        
         try:
             if args.test_mode:
                 # Use sample data in test mode

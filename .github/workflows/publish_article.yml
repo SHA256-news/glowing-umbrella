@@ -75,10 +75,7 @@ jobs:
             done
           fi
 
-          if [ ! -s news_uris.txt ] && [ "${ENABLE_TEST_FALLBACK:-true}" = "true" ]; then
-            echo "No URIs found after retries. Using test mode fallback."
-            python scripts/fetch_news.py --test-mode --output-format uris > news_uris.txt || true
-          fi
+          # Test mode fallback removed - workflow should fail if no real news URIs available
 
           if [ ! -s news_uris.txt ]; then
             echo "No news articles found and fallback disabled. Exiting."

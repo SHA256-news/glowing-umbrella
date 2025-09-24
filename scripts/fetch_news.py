@@ -424,12 +424,13 @@ def fetch_bitcoin_mining_events(api_key: Optional[str] = None,
         return event_uris, event_details_cache
         
     except TimeoutError:
-        print(f"Error: API query timed out (>{timeout_seconds} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
+        print(f"Error: API query timed out (>{timeout} seconds). Try reducing the time window or number of articles.", file=sys.stderr)
         raise APITimeoutError("API query timed out")
     except Exception as e:
         print(f"Error fetching events from EventRegistry: {e}", file=sys.stderr)
-        # For non-timeout errors, return empty list instead of crashing
-        return [], {}
+        # Re-raise the exception so failures propagate properly
+        # This prevents silent failures that mask underlying API issues
+        raise
     finally:
         # Ensure alarm is always canceled
         try:
