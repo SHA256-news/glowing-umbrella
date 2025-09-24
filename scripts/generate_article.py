@@ -54,6 +54,28 @@ def load_events_queue():
     data = read_json_file(EVENTS_FILE, default_value={'event_uris': [], 'total_events': 0})
     return data.get('event_uris', [])
 
+def check_events_file_status():
+    """Check the status of the events file to determine if it exists and what it contains."""
+    if not os.path.exists(EVENTS_FILE):
+        return "missing"  # No events.json file exists (likely API failure in workflow)
+    
+    try:
+        data = read_json_file(EVENTS_FILE)
+        event_uris = data.get('event_uris', [])
+        
+        if not event_uris:
+            # File exists but no events - could be genuine "no news" or API returned empty
+            if 'updated_at' in data:
+                # If updated_at is present, fetch was successful but found no news
+                return "empty_success"
+            else:
+                # Malformed or incomplete file
+                return "malformed"
+        else:
+            return "has_events"
+    except Exception:
+        return "malformed"
+
 def load_cached_event_details():
     """Load cached event details from the queue file."""
     data = read_json_file(EVENTS_FILE, default_value={})
@@ -105,34 +127,60 @@ def add_failed_event(event_uri, error_message):
     }
     write_json_file(FAILED_EVENTS_FILE, data)
 
-def write_placeholder(path="generated_article.json"):
-    """Write a placeholder article when no events were processed."""
-    doc = {
-        "title": "No Recent Bitcoin Mining News", 
-        "headline": "No Recent Bitcoin Mining News",
-        "subtitle": "The news API returned no recent Bitcoin mining events during this run.",
-        "content": """Bitcoin mining news can vary significantly in frequency, with some periods experiencing high activity around difficulty adjustments, hash rate changes, or major industry developments, while others may see quieter periods.
+def write_placeholder(path="generated_article.json", reason="no_news"):
+    """Write a placeholder article when no events were processed.
+    
+    Args:
+        path: Output path for the article
+        reason: Reason for placeholder ("no_news", "api_failure", "technical_issue")
+    """
+    if reason == "api_failure":
+        title = "Bitcoin Mining News Temporarily Unavailable"
+        subtitle = "News fetching encountered technical difficulties during this run."
+        content = """Our automated news monitoring system experienced technical difficulties while attempting to fetch the latest Bitcoin mining developments. This may be due to API timeouts, network connectivity issues, or temporary service disruptions.
+
+This does not necessarily mean there is no Bitcoin mining news available - rather, our system was unable to successfully retrieve and process news sources during this run.
+
+The Bitcoin mining network continues to operate normally, and significant developments may have occurred that we were unable to capture due to these technical issues. We'll continue attempting to fetch news on the next scheduled run and encourage readers to check other reliable Bitcoin mining news sources in the meantime."""
+        
+        key_points = [
+            "News fetching system encountered technical difficulties",
+            "This may not reflect actual availability of Bitcoin mining news",
+            "Could be due to API timeouts, network issues, or service disruptions",  
+            "Bitcoin mining network continues operating normally",
+            "System will retry fetching news on next scheduled run"
+        ]
+    else:
+        # Default "no_news" case
+        title = "No Recent Bitcoin Mining News"
+        subtitle = "The news API returned no recent Bitcoin mining events during this run."
+        content = """Bitcoin mining news can vary significantly in frequency, with some periods experiencing high activity around difficulty adjustments, hash rate changes, or major industry developments, while others may see quieter periods.
 
 During these quieter intervals, it's worth noting that Bitcoin's mining network continues to operate steadily. Miners worldwide maintain the network's security through continuous block production, even when major headlines aren't being generated.
 
-We'll continue monitoring for fresh Bitcoin mining developments and will publish updates automatically once newsworthy events emerge. This automated approach ensures our readers receive timely coverage of significant mining industry developments.""",
-        "created_at": int(time.time()),
-        "generated_at": datetime.now().isoformat(),
-        "body": """Bitcoin mining news can vary significantly in frequency, with some periods experiencing high activity around difficulty adjustments, hash rate changes, or major industry developments, while others may see quieter periods.
+We'll continue monitoring for fresh Bitcoin mining developments and will publish updates automatically once newsworthy events emerge. This automated approach ensures our readers receive timely coverage of significant mining industry developments."""
 
-During these quieter intervals, it's worth noting that Bitcoin's mining network continues to operate steadily. Miners worldwide maintain the network's security through continuous block production, even when major headlines aren't being generated.
-
-We'll continue monitoring for fresh Bitcoin mining developments and will publish updates automatically once newsworthy events emerge. This automated approach ensures our readers receive timely coverage of significant mining industry developments.""",
-        "key_points": [
+        key_points = [
             "Bitcoin mining news frequency naturally fluctuates based on industry activity cycles",
             "Mining network continues operating normally during quiet news periods",
             "Automated monitoring ensures no significant developments are missed",
             "Next update will be generated when fresh mining-related events occur",
             "This pattern is typical in the cryptocurrency mining industry"
-        ],
+        ]
+    
+    doc = {
+        "title": title, 
+        "headline": title,
+        "subtitle": subtitle,
+        "content": content,
+        "created_at": int(time.time()),
+        "generated_at": datetime.now().isoformat(),
+        "body": content,
+        "key_points": key_points,
         "tags": ["bitcoin", "mining", "automated", "placeholder"],
         "model_used": "placeholder-generator",
-        "source_event_uri": "placeholder"
+        "source_event_uri": "placeholder",
+        "placeholder_reason": reason
     }
     
     # Also write to articles directory for workflow compatibility
@@ -345,19 +393,47 @@ def main():
     # Load event URIs from the queue
     event_uris = load_events_queue()
     cached_event_details = load_cached_event_details()
+    events_status = check_events_file_status()
     
     if cached_event_details:
         print(f"Loaded cached details for {len(cached_event_details)} events as fallback")
 
     if not event_uris:
-        print("No new events to process.")
-        # Check if we should write a placeholder article
-        if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
-            print("Writing placeholder article due to no events.")
-            write_placeholder()
-            sys.exit(0)
+        if events_status == "missing":
+            print("No events.json file found - this suggests the news fetching step failed.")
+            print("This could be due to API timeouts, network issues, or other technical problems.")
+            print("The issue may not be lack of news, but rather inability to fetch available news.")
+            
+            if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+                print("Writing placeholder article, but note this may be due to technical issues, not lack of news.")
+                write_placeholder(reason="api_failure")
+                sys.exit(0)
+            else:
+                print("Placeholder generation disabled. Exiting without creating article.")
+                sys.exit(1)
+        elif events_status == "empty_success":
+            print("News fetching was successful but found no relevant Bitcoin mining events.")
+            print("This indicates there genuinely is no recent news to report.")
+            
+            if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+                print("Writing placeholder article due to confirmed absence of news.")
+                write_placeholder(reason="no_news")
+                sys.exit(0)
+            else:
+                print("No events found to process. This is normal if there's genuinely no recent news.")
+                return
         else:
-            return
+            # malformed or other issues
+            print("Events file exists but appears malformed or incomplete.")
+            print("This suggests an issue with the news fetching process.")
+            
+            if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
+                print("Writing placeholder article due to malformed events data.")
+                write_placeholder(reason="technical_issue")
+                sys.exit(0)
+            else:
+                print("Cannot process malformed events data. Exiting.")
+                sys.exit(1)
 
     print(f"Found {len(event_uris)} events to process.")
     
@@ -536,7 +612,7 @@ def main():
         if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
             print(f"\nNo events successfully processed out of {len(event_uris)} events.")
             print("Writing placeholder article due to processing failures.")
-            write_placeholder()
+            write_placeholder(reason="technical_issue")
             sys.exit(0)
         else:
             print(f"\nError: Failed to process any of the {len(event_uris)} events.")
@@ -548,10 +624,10 @@ def main():
             print("\nCheck the failed_events.json file for detailed error information.")
             sys.exit(1)
     elif processed_count == 0:
-        # No events to process at all
+        # No events to process at all (this shouldn't happen now due to earlier logic)
         if os.getenv("ENABLE_PLACEHOLDER", "true").lower() == "true":
             print("\nNo events found to process. Writing placeholder article.")
-            write_placeholder()
+            write_placeholder(reason="no_news")
             sys.exit(0)
         else:
             print("\nNo events found to process. This is normal if the queue is empty.")
