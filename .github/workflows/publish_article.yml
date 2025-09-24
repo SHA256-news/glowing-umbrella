@@ -46,15 +46,19 @@ jobs:
         id: fetch_news
         env:
           EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
-          MAX_ARTICLES: "5"
-          MINUTES_BACK: "6"
         run: |
           set -euo pipefail
 
-          max_articles="${MAX_ARTICLES:-5}"
-          minutes_back="${MINUTES_BACK:-6}"
+          # Get parameters from workflow inputs or defaults
+          max_articles="${{ github.event.inputs.max_articles || '5' }}"
+          days_back="${{ github.event.inputs.days_back || '1' }}"
+          
+          # Convert days to minutes for the script
+          minutes_back=$((days_back * 24 * 60))
 
-          echo "Attempting fast fetch..."
+          echo "Fetching news: max_articles=$max_articles, days_back=$days_back (${minutes_back} minutes)"
+
+          echo "Attempting fast fetch with ${minutes_back} minute window..."
           python scripts/fetch_news.py \
             --max-articles "$max_articles" \
             --minutes-back "$minutes_back" \
@@ -62,12 +66,14 @@ jobs:
             --fast-mode > news_uris.txt || true
 
           if [ ! -s news_uris.txt ]; then
-            echo "Fast mode returned no data. Trying smaller windows with retries..."
-            for minutes in 60 30 15 5 2; do
-              echo "Trying ${minutes} minute window..."
+            echo "Fast mode returned no data. Trying progressive fallback with smaller windows..."
+            # Progressive fallback with smaller time windows
+            for hours in 12 6 3 1; do
+              fallback_minutes=$((hours * 60))
+              echo "Trying ${hours} hour window (${fallback_minutes} minutes)..."
               python scripts/fetch_news.py \
                 --max-articles "$max_articles" \
-                --minutes-back "$minutes" \
+                --minutes-back "$fallback_minutes" \
                 --output-format uris \
                 --timeout 45 \
                 --retries 3 > news_uris.txt && break || true
@@ -166,6 +172,7 @@ jobs:
           # Extract headline for summary
           headline=$(python -c "import json; data=json.load(open('generated_article.json')); print(data.get('headline', 'Bitcoin Mining News'))")
           echo "article_headline=$headline" >> $GITHUB_OUTPUT
+          echo "article_generated=true" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Issue with Article
         if: success()
@@ -174,43 +181,78 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Read the generated article
-            const articleData = JSON.parse(fs.readFileSync('generated_article.json', 'utf8'));
+            try {
+              // Read the generated article
+              const articleData = JSON.parse(fs.readFileSync('generated_article.json', 'utf8'));
 
-            // Create issue body
-            const issueBody = `# ${articleData.headline}
+              // Create issue body with all available fields
+              let issueBody = `# ${articleData.headline || 'Bitcoin Mining News'}
 
             ${articleData.subtitle || ''}
 
             ## Article Content
 
-            ${articleData.content}
+            ${articleData.content || articleData.body || 'No content available'}`;
+
+              // Add key points if available
+              if (articleData.key_points && Array.isArray(articleData.key_points)) {
+                issueBody += `
 
             ## Key Points
 
-            ${articleData.key_points ? articleData.key_points.map(point => `- ${point}`).join('\n') : 'N/A'}
+            ${articleData.key_points.map(point => `- ${point}`).join('\n')}`;
+              }
+
+              // Add AI-generated reflection questions if available
+              if (articleData.reflection_questions && Array.isArray(articleData.reflection_questions)) {
+                issueBody += `
+
+            ## Reflection Questions
+
+            ${articleData.reflection_questions.map(q => `- ${q}`).join('\n')}`;
+              }
+
+              // Add calls to action if available
+              if (articleData.calls_to_action && Array.isArray(articleData.calls_to_action)) {
+                issueBody += `
+
+            ## Calls to Action
+
+            ${articleData.calls_to_action.map(cta => `- ${cta}`).join('\n')}`;
+              }
+
+              // Add metadata section
+              issueBody += `
 
             ## Metadata
 
-            - **Generated At:** ${articleData.generated_at}
-            - **Source Event URI:** ${articleData.source_event_uri}
-            - **Model Used:** ${articleData.model_used}
-            - **Tags:** ${articleData.tags ? articleData.tags.join(', ') : 'N/A'}
+            - **Generated At:** ${articleData.generated_at || 'N/A'}
+            - **Source Event URI:** ${articleData.source_event_uri || 'N/A'}
+            - **Model Used:** ${articleData.model_used || 'N/A'}
+            - **Tags:** ${articleData.tags ? articleData.tags.join(', ') : 'N/A'}`;
+
+              issueBody += `
 
             ---
 
             *This article was automatically generated by the news pipeline.*`;
 
-            // Create the issue with safe labels only
-            const { data: issue } = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `📰 ${articleData.headline}`,
-              body: issueBody,
-              labels: ['automated-article']
-            });
+              // Create the issue with safe labels only
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `📰 ${articleData.headline || 'Bitcoin Mining News'}`,
+                body: issueBody,
+                labels: ['automated-article']
+              });
 
-            console.log(`Created issue #${issue.number}: ${issue.title}`);
+              console.log(`Created issue #${issue.number}: ${issue.title}`);
+              
+            } catch (error) {
+              console.error('Error creating GitHub issue:', error.message);
+              // Don't fail the entire workflow if issue creation fails
+              console.log('Continuing workflow despite issue creation failure');
+            }
 
       - name: Upload article artifact
         if: success()
@@ -223,18 +265,24 @@ jobs:
           retention-days: 30
 
       - name: Trigger Twitter posting workflow
-        if: success()
+        if: steps.generate_article.outputs.article_generated == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'post_to_twitter.yml',
-              ref: context.ref,
-              inputs: {
-                article_run_number: '${{ github.run_number }}'
-              }
-            });
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'post_to_twitter.yml',
+                ref: context.ref,
+                inputs: {
+                  article_run_number: '${{ github.run_number }}'
+                }
+              });
 
-            console.log('Triggered Twitter posting workflow');
+              console.log('Successfully triggered Twitter posting workflow with run number: ${{ github.run_number }}');
+            } catch (error) {
+              console.error('Error triggering Twitter workflow:', error.message);
+              // Don't fail the entire workflow if Twitter trigger fails
+              console.log('Article generation completed successfully despite Twitter trigger failure');
+            }
