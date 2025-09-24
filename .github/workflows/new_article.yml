@@ -1,0 +1,242 @@
+name: Publish Article
+
+'on':
+  schedule:
+    # Run every day at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      max_articles:
+        description: 'Maximum number of articles to fetch'
+        required: false
+        default: '5'
+        type: string
+      days_back:
+        description: 'Number of days back to search (1-7 recommended)'
+        required: false
+        default: '1'
+        type: string
+      test_mode:
+        description: 'Run in test mode with sample data (no API calls)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  fetch-and-generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch Bitcoin mining news
+        id: fetch_news
+        env:
+          EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
+        run: |
+          set -euo pipefail
+          
+          # Set parameters from inputs or defaults
+          max_articles="${{ github.event.inputs.max_articles || '5' }}"
+          days_back="${{ github.event.inputs.days_back || '1' }}"
+          test_mode="${{ github.event.inputs.test_mode || 'false' }}"
+          
+          echo "Fetching Bitcoin mining news..."
+          echo "Parameters: max_articles=$max_articles, days_back=$days_back, test_mode=$test_mode"
+          
+          if [ "$test_mode" = "true" ]; then
+            echo "🧪 Running in test mode - using sample data"
+            # Create test events.json for test mode
+            cat > events.json <<EOF
+          {
+            "event_uris": ["test-event-001", "test-event-002"],
+            "updated_at": "$(date -Iseconds)",
+            "total_events": 2,
+            "event_details_cache": {
+              "test-event-001": {
+                "title": "Test Bitcoin Mining Event",
+                "body": "Sample mining news for testing",
+                "date": "$(date -Idate)",
+                "url": "https://example.com/test",
+                "source": "Test Source"
+              }
+            }
+          }
+          EOF
+            echo "first_uri=test-event-001" >> $GITHUB_OUTPUT
+            echo "article_count=2" >> $GITHUB_OUTPUT
+          else
+            # Use the proper EventRegistry API approach with correct parameters
+            python scripts/fetch_news.py \
+              --max-articles "$max_articles" \
+              --days-back "$days_back" \
+              --output events.json \
+              --output-format json || {
+                echo "Failed to fetch news from EventRegistry API"
+                exit 1
+              }
+            
+            # Extract first URI and count from the generated events.json
+            if [ -f events.json ]; then
+              first_uri=$(python -c "import json; data=json.load(open('events.json')); print(data['event_uris'][0] if data['event_uris'] else '')")
+              article_count=$(python -c "import json; data=json.load(open('events.json')); print(len(data['event_uris']))")
+              
+              if [ -z "$first_uri" ]; then
+                echo "No news articles found in the specified time window"
+                exit 1
+              fi
+              
+              echo "first_uri=$first_uri" >> $GITHUB_OUTPUT
+              echo "article_count=$article_count" >> $GITHUB_OUTPUT
+              echo "Found $article_count news articles"
+              echo "Processing first article: $first_uri"
+            else
+              echo "Failed to create events.json"
+              exit 1
+            fi
+          fi
+
+      - name: Generate article
+        id: generate_article
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EVENTREGISTRY_API_KEY: ${{ secrets.EVENTREGISTRY_API_KEY }}
+        run: |
+          if [ -z "${{ steps.fetch_news.outputs.first_uri }}" ]; then
+            echo "No news URI available for article generation"
+            exit 1
+          fi
+          
+          echo "Generating article for URI: ${{ steps.fetch_news.outputs.first_uri }}"
+          test_mode="${{ github.event.inputs.test_mode || 'false' }}"
+          
+          if [ "$test_mode" = "true" ]; then
+            echo "🧪 Using test mode for article generation"
+            python scripts/generate_article.py --test-mode
+          else
+            # Generate article from the fetched events
+            python scripts/generate_article.py || {
+              echo "Failed to generate article"
+              exit 1
+            }
+          fi
+          
+          # Verify the article was generated
+          if [ -f "generated_article.json" ]; then
+            echo "Article generated successfully"
+            # Extract headline for output
+            headline=$(python -c "import json; data=json.load(open('generated_article.json')); print(data.get('headline', 'Bitcoin Mining News'))")
+            echo "article_headline=$headline" >> $GITHUB_OUTPUT
+          elif [ -d "articles" ] && [ -n "$(ls -A articles/)" ]; then
+            # Alternative: check articles directory
+            latest_article=$(ls -t articles/*.json | head -n 1)
+            if [ -n "$latest_article" ]; then
+              cp "$latest_article" generated_article.json
+              echo "Article found in articles directory: $latest_article"
+              headline=$(python -c "import json; data=json.load(open('generated_article.json')); print(data.get('headline', 'Bitcoin Mining News'))")
+              echo "article_headline=$headline" >> $GITHUB_OUTPUT
+            else
+              echo "No article files found"
+              exit 1
+            fi
+          else
+            echo "Failed to generate article"
+            exit 1
+          fi
+
+      - name: Create GitHub Issue with Article
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            try {
+              // Read the generated article
+              const articleData = JSON.parse(fs.readFileSync('generated_article.json', 'utf8'));
+              
+              // Build issue body with proper formatting
+              let issueBody = `# ${articleData.headline || 'Bitcoin Mining News'}\n\n`;
+              
+              if (articleData.subtitle) {
+                issueBody += `**${articleData.subtitle}**\n\n`;
+              }
+              
+              issueBody += `## Article Content\n\n${articleData.content || articleData.body || 'Content not available'}\n\n`;
+              
+              if (articleData.key_points && articleData.key_points.length > 0) {
+                issueBody += `## Key Points\n\n`;
+                articleData.key_points.forEach(point => {
+                  issueBody += `- ${point}\n`;
+                });
+                issueBody += '\n';
+              }
+              
+              // Add metadata section
+              issueBody += `## Metadata\n\n`;
+              issueBody += `- **Generated At:** ${articleData.generated_at || new Date().toISOString()}\n`;
+              issueBody += `- **Source Event URI:** ${articleData.source_event_uri || 'N/A'}\n`;
+              issueBody += `- **Model Used:** ${articleData.model_used || 'gemini-pro'}\n`;
+              
+              if (articleData.tags && articleData.tags.length > 0) {
+                issueBody += `- **Tags:** ${articleData.tags.join(', ')}\n`;
+              }
+              
+              issueBody += `\n---\n\n*This article was automatically generated by the news pipeline.*`;
+              
+              // Create the issue
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `📰 ${articleData.headline || 'Bitcoin Mining News Update'}`,
+                body: issueBody,
+                labels: ['automated-article', 'bitcoin-mining']
+              });
+              
+              console.log(`Created issue #${issue.number}: ${issue.title}`);
+              
+            } catch (error) {
+              console.error('Error creating issue:', error);
+              throw error;
+            }
+
+      - name: Upload article artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-article-${{ github.run_number }}
+          path: |
+            generated_article.json
+            events.json
+          retention-days: 30
+
+      - name: Trigger Twitter posting workflow
+        if: success() && steps.fetch_news.outputs.article_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'post_to_twitter.yml',
+              ref: context.ref,
+              inputs: {
+                article_run_number: '${{ github.run_number }}'
+              }
+            });
+            
+            console.log('Triggered Twitter posting workflow');
