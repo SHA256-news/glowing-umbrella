@@ -35,10 +35,12 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download article artifact
-        uses: actions/download-artifact@v4
+        uses: dawidd6/action-download-artifact@v3
         with:
           name: generated-article-${{ github.event.inputs.article_run_number }}
           path: ./artifacts/
+          workflow: publish_article.yml
+          run_number: ${{ github.event.inputs.article_run_number }}
 
       - name: Verify article file
         run: |
@@ -94,7 +96,7 @@ jobs:
           # Display the thread in text format for verification
           python scripts/create_summary.py \
             "./artifacts/generated_article.json" \
-            --max-tweets "${{ steps.create_summary.outputs.total_tweets }}" \
+            --max-tweets "${{ github.event.inputs.max_tweets || '8' }}" \
             --format text
 
           echo ""
