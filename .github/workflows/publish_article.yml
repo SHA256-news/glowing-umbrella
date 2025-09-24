@@ -56,9 +56,6 @@ jobs:
           # Convert days to minutes for the script
           minutes_back=$((days_back * 24 * 60))
 
-          # Convert days to minutes for the script
-          minutes_back=$((days_back * 24 * 60))
-
           echo "Fetching news: max_articles=$max_articles, days_back=$days_back (${minutes_back} minutes)"
 
           echo "Attempting fast fetch with ${minutes_back} minute window..."
